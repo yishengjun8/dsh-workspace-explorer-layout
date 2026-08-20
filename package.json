@@ -1,0 +1,33 @@
+{
+  "name": "@deepseek-ai/dsh-workspace-explorer-layout",
+  "description": "Installable DeepSeek Harness Web bundle providing a four-pane workspace explorer layout with syntax-highlighted file browsing and guarded text editing",
+  "version": "0.4.0",
+  "type": "module",
+  "exports": {
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-client-ui-workspace-explorer-layout": "file:./packages/client/ui-workspace-explorer-layout"
+  },
+  "files": [
+    "cordis.patch.yml",
+    "install.sh",
+    "uninstall.sh",
+    "README.md",
+    "README.zh.md",
+    "LICENSE",
+    "packages/client/ui-workspace-explorer-layout/lib/**/*.js",
+    "packages/client/ui-workspace-explorer-layout/package.json",
+    "packages/client/ui-workspace-explorer-layout/README.md",
+    "packages/client/ui-workspace-explorer-layout/README.zh.md",
+    "packages/client/ui-workspace-explorer-layout/LICENSE",
+    "packages/client/ui-workspace-explorer-layout/THIRD_PARTY_NOTICES.md"
+  ],
+  "license": "MIT"
+}

@@ -1,0 +1,16 @@
+# Replace the shipped root layout while preserving the sidebar, conversation,
+# details, and overlay slot contracts for the existing Web feature plugins.
+- id: ui-layout
+  disabled: true
+
+- insert:
+    - id: workspace-explorer-layout
+      name: '@deepseek-ai/dsh-client-ui-workspace-explorer-layout'
+      config:
+        enableEditing: true
+        maxContextBytes: 65536
+        maxPromptContextBytes: 69632
+        maxContextSourceBytes: 10485760
+        maxEditableBytes: 1048576
+        maxEntriesPerDirectory: 1000
+        maxPreviewBytes: 1048576
