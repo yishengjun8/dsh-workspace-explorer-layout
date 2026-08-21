@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer'
 import { execFile, spawn } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { lstat, mkdir, open, readdir, realpath, rename, stat, unlink } from 'node:fs/promises'
+import { copyFile, lstat, mkdir, open, readdir, realpath, rename, rm, stat, unlink } from 'node:fs/promises'
 import { release as osRelease } from 'node:os'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
@@ -932,6 +932,154 @@ function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
+/**
+ * Recursively copy a file or directory tree. Symlinks are skipped: copying
+ * them verbatim could smuggle out-of-workspace targets into the destination
+ * tree, and the caller already rejected symlink components on the source path.
+ */
+async function copyTree(source, target) {
+  const sourceStat = await lstat(source)
+  if (sourceStat.isDirectory()) {
+    await mkdir(target)
+    const raw = await readdir(source, { withFileTypes: true })
+    for (const dirent of raw) {
+      if (dirent.isSymbolicLink()) continue
+      await copyTree(resolve(source, dirent.name), resolve(target, dirent.name))
+    }
+  } else {
+    await copyFile(source, target)
+  }
+}
+
+/** Delete a file or an entire directory tree without following symlinks. */
+async function removeEntryTree(target, targetStat) {
+  if (targetStat.isDirectory()) await rm(target, { recursive: true })
+  else await unlink(target)
+}
+
+/** Append a numeric suffix before the extension (a.txt -> a-1.txt); dotfiles
+ * and extension-less names get the suffix at the end (.gitignore-1, dir-1). */
+function dedupeName(name, index) {
+  const dot = name.lastIndexOf('.')
+  if (dot > 0) return `${name.slice(0, dot)}-${index}${name.slice(dot)}`
+  return `${name}-${index}`
+}
+
+/**
+ * Copy or move (cut+paste) one workspace-confined entry. Move prefers rename
+ * and falls back to copy+delete across devices (EXDEV). A colliding target
+ * name is auto-deduplicated (a.txt -> a-1.txt -> a-2.txt ...) so a paste never
+ * fails on an existing entry.
+ */
+async function copyEntry(workspace, sourcePath, targetPath, config, queues, cut) {
+  if (!config.enableEditing) throw new HttpError(403, 'editing-disabled', '当前未启用文件编辑')
+  if (sourcePath === '') throw new HttpError(400, 'invalid-path', '不能复制工作区根目录')
+  if (targetPath === '') throw new HttpError(400, 'invalid-path', '目标不能是工作区根目录')
+  if (targetPath.startsWith(`${sourcePath}/`)) {
+    throw new HttpError(400, 'invalid-target', '不能复制到自身或其子目录')
+  }
+  if (cut && targetPath === sourcePath) {
+    throw new HttpError(400, 'invalid-target', '不能移动到自身')
+  }
+  const root = await realpath(workspace.path)
+  const source = await resolveWorkspacePath(root, sourcePath)
+  if (await hasSymlinkComponent(root, sourcePath)) throw new HttpError(403, 'symlink-write-denied', '拒绝复制符号链接路径')
+  const sourceStat = await lstat(source)
+  if (!sourceStat.isDirectory() && !sourceStat.isFile()) throw new HttpError(400, 'invalid-entry-kind', '只能复制文件或文件夹')
+  const targetParentPath = parentPath(targetPath)
+  const targetParent = await resolveWorkspacePath(root, targetParentPath)
+  const targetParentStat = await lstat(targetParent)
+  if (!targetParentStat.isDirectory()) throw new HttpError(400, 'not-a-directory', '目标位置不是目录')
+  const targetName = targetPath.slice(targetPath.lastIndexOf('/') + 1)
+  const target = resolve(targetParent, targetName)
+  if (!isInside(root, target)) throw new HttpError(403, 'path-outside-workspace', '拒绝写入工作区之外的路径')
+  return serializeWrite(queues, `${sourcePath}->${targetPath}`, async () => {
+    if (await hasSymlinkComponent(root, sourcePath) || await hasSymlinkComponent(root, targetParentPath)) {
+      throw new HttpError(403, 'symlink-write-denied', '拒绝通过符号链接复制文件')
+    }
+    // Auto-deduplicate the target name inside the write queue so the choice is
+    // atomic against concurrent mutations: a.txt -> a-1.txt -> a-2.txt ...
+    let chosen = target
+    let chosenPath = targetPath
+    let chosenName = targetName
+    let index = 1
+    for (;;) {
+      try {
+        await lstat(chosen)
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error
+        break
+      }
+      if (index > 10000) throw new HttpError(409, 'entry-exists', '同名条目过多，无法自动命名')
+      const candidateName = dedupeName(targetName, index)
+      chosenName = candidateName
+      chosenPath = entryPath(targetParentPath, candidateName)
+      chosen = resolve(targetParent, candidateName)
+      index += 1
+    }
+    if (cut) {
+      try {
+        await rename(source, chosen)
+      } catch (error) {
+        if (error?.code !== 'EXDEV') throw error
+        await copyTree(source, chosen)
+        await removeEntryTree(source, sourceStat)
+      }
+    } else {
+      await copyTree(source, chosen)
+    }
+    return {
+      workspaceId: String(workspace.id),
+      fromPath: sourcePath,
+      path: chosenPath,
+      name: chosenName,
+      kind: sourceStat.isDirectory() ? 'directory' : 'file',
+      symlink: false,
+      cut,
+    }
+  })
+}
+
+/** Delete one workspace-confined file or directory tree (root excluded). */
+async function deleteEntry(workspace, relativePath, config, queues) {
+  if (!config.enableEditing) throw new HttpError(403, 'editing-disabled', '当前未启用文件编辑')
+  if (relativePath === '') throw new HttpError(400, 'invalid-path', '不能删除工作区根目录')
+  const root = await realpath(workspace.path)
+  const source = await resolveWorkspacePath(root, relativePath)
+  if (await hasSymlinkComponent(root, relativePath)) throw new HttpError(403, 'symlink-write-denied', '拒绝删除符号链接路径')
+  const sourceStat = await lstat(source)
+  if (!sourceStat.isDirectory() && !sourceStat.isFile()) throw new HttpError(400, 'invalid-entry-kind', '只能删除文件或文件夹')
+  return serializeWrite(queues, `delete:${relativePath}`, async () => {
+    if (await hasSymlinkComponent(root, relativePath)) throw new HttpError(403, 'symlink-write-denied', '拒绝删除符号链接路径')
+    const current = await realpath(source)
+    if (!isInside(root, current)) throw new HttpError(403, 'path-outside-workspace', '拒绝删除工作区之外的路径')
+    await removeEntryTree(source, sourceStat)
+    return { workspaceId: String(workspace.id), path: relativePath, kind: sourceStat.isDirectory() ? 'directory' : 'file' }
+  })
+}
+
+/** Dispatch the copy/move/delete file operations from the /fs endpoint. */
+async function fsOperation(workspace, config, queues, req) {
+  const payload = await readJsonObject(req, config)
+  const action = payload.action
+  if (action !== 'copy' && action !== 'move' && action !== 'delete') {
+    throw new HttpError(400, 'invalid-action', '只能执行复制、移动或删除操作')
+  }
+  if (action === 'delete') {
+    const path = typeof payload.path === 'string'
+      ? normalizeRelativePath(payload.path)
+      : (() => { throw new HttpError(400, 'invalid-path', '删除目标路径无效') })()
+    return deleteEntry(workspace, path, config, queues)
+  }
+  const source = typeof payload.source === 'string'
+    ? normalizeRelativePath(payload.source)
+    : (() => { throw new HttpError(400, 'invalid-path', '源路径无效') })()
+  const target = typeof payload.target === 'string'
+    ? normalizeRelativePath(payload.target)
+    : (() => { throw new HttpError(400, 'invalid-path', '目标路径无效') })()
+  return copyEntry(workspace, source, target, config, queues, action === 'move')
+}
+
 function requiredText(value, name, maximum) {
   if (typeof value !== 'string' || value.length === 0 || value.length > maximum
     || /\u0000|[\u0001-\u001f\u007f\u2028\u2029]/u.test(value)) {
@@ -1206,6 +1354,7 @@ async function handleRequest(ctx, config, trustedHosts, writeQueues, req, res) {
     const entryEndpoint = url.pathname === `${API_PREFIX}/entry`
     const externalFileEndpoint = url.pathname === `${API_PREFIX}/external-file`
     const fileEndpoint = url.pathname === `${API_PREFIX}/file`
+    const fsEndpoint = url.pathname === `${API_PREFIX}/fs`
     const treeEndpoint = url.pathname === `${API_PREFIX}/tree`
     const searchEndpoint = url.pathname === `${API_PREFIX}/search`
     const revealEndpoint = url.pathname === `${API_PREFIX}/reveal`
@@ -1219,18 +1368,20 @@ async function handleRequest(ctx, config, trustedHosts, writeQueues, req, res) {
             ? 'POST'
             : fileEndpoint
               ? 'GET, HEAD, PUT'
-              : treeEndpoint
-                ? 'GET, HEAD'
-                : searchEndpoint
+              : fsEndpoint
+                ? 'POST'
+                : treeEndpoint
                   ? 'GET, HEAD'
-                  : revealEndpoint
-                    ? 'POST'
-                    : undefined
+                  : searchEndpoint
+                    ? 'GET, HEAD'
+                    : revealEndpoint
+                      ? 'POST'
+                      : undefined
     if (allowed !== undefined && !allowed.split(', ').includes(req.method ?? '')) {
       sendError(req, res, 405, 'method-not-allowed', `该接口只允许 ${allowed} 请求`, { allow: allowed })
       return
     }
-    if (!contextEndpoint && !encodingsEndpoint && !entryEndpoint && !externalFileEndpoint && !fileEndpoint && !treeEndpoint && !searchEndpoint && !revealEndpoint) {
+    if (!contextEndpoint && !encodingsEndpoint && !entryEndpoint && !externalFileEndpoint && !fileEndpoint && !fsEndpoint && !treeEndpoint && !searchEndpoint && !revealEndpoint) {
       sendError(req, res, 404, 'endpoint-not-found', '接口不存在')
       return
     }
@@ -1263,6 +1414,10 @@ async function handleRequest(ctx, config, trustedHosts, writeQueues, req, res) {
     }
     const relativePath = normalizeRelativePath(url.searchParams.get('path') ?? '')
     const encodingId = url.searchParams.get('encoding') ?? 'utf-8'
+    if (fsEndpoint) {
+      sendJson(req, res, 200, await fsOperation(workspace, config, writeQueues, req))
+      return
+    }
     if (revealEndpoint) {
       sendJson(req, res, 200, await revealInExplorer(workspace, relativePath))
       return
