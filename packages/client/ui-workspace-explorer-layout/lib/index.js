@@ -3,6 +3,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { lstat, mkdir, open, readdir, realpath, rename, stat, unlink } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import z from '@deepseek-ai/schemastery'
+import iconv from 'iconv-lite'
 
 /** Stable Cordis plugin name. */
 export const name = 'workspace-explorer-layout'
@@ -373,8 +374,90 @@ function revisionFor(bytes) {
   return createHash('sha256').update(bytes).digest('hex')
 }
 
-function textMetadata(bytes, content) {
-  const bom = bytes.byteLength >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf
+/**
+ * Supported text encodings. `id` is the canonical identifier the API and the
+ * Web client exchange; `decodeLabel` feeds the WHATWG TextDecoder used for
+ * decoding, and `encode` the iconv-lite name used when writing. UTF-8 BOM and
+ * UTF-16 LE/BE BOM are written by the encoder itself rather than by callers.
+ */
+const ENCODINGS = Object.freeze([
+  { id: 'utf-8', label: 'UTF-8', decodeLabel: 'utf-8', encode: 'utf8' },
+  { id: 'utf-8-bom', label: 'UTF-8（带 BOM）', decodeLabel: 'utf-8', encode: 'utf8' },
+  { id: 'utf-16le', label: 'UTF-16 LE', decodeLabel: 'utf-16le', encode: 'utf16-le' },
+  { id: 'utf-16be', label: 'UTF-16 BE', decodeLabel: 'utf-16be', encode: 'utf16-be' },
+  { id: 'gbk', label: 'GBK', decodeLabel: 'gbk', encode: 'gbk' },
+  { id: 'gb18030', label: 'GB18030', decodeLabel: 'gb18030', encode: 'gb18030' },
+  { id: 'big5', label: 'Big5', decodeLabel: 'big5', encode: 'big5' },
+  { id: 'shift_jis', label: 'Shift_JIS', decodeLabel: 'shift_jis', encode: 'shift_jis' },
+  { id: 'euc-jp', label: 'EUC-JP', decodeLabel: 'euc-jp', encode: 'euc-jp' },
+  { id: 'euc-kr', label: 'EUC-KR', decodeLabel: 'euc-kr', encode: 'euc-kr' },
+  { id: 'iso-8859-1', label: 'ISO-8859-1（Latin-1）', decodeLabel: 'iso-8859-1', encode: 'latin1' },
+  { id: 'windows-1252', label: 'Windows-1252', decodeLabel: 'windows-1252', encode: 'windows-1252' },
+  { id: 'windows-1251', label: 'Windows-1251（西里尔）', decodeLabel: 'windows-1251', encode: 'windows-1251' },
+  { id: 'ascii', label: 'ASCII', decodeLabel: 'ascii', encode: 'ascii' },
+])
+
+function encodingById(id) {
+  const found = ENCODINGS.find(encoding => encoding.id === id)
+  if (found === undefined) throw new HttpError(400, 'unsupported-encoding', '不支持的编码格式')
+  return found
+}
+
+function hasBom(bytes, encodingId) {
+  if (encodingId === 'utf-16le') return bytes.byteLength >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe
+  if (encodingId === 'utf-16be') return bytes.byteLength >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff
+  return bytes.byteLength >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf
+}
+
+/**
+ * Decode bytes strictly as `encodingId`. UTF-8 keeps its existing trim-aware
+ * decoder; other encodings use a fatal TextDecoder, retrying progressively
+ * shorter prefixes so a truncated trailing character does not fail the read.
+ */
+function decodeBytes(bytes, encodingId, mayEndMidCharacter) {
+  if (encodingId === 'utf-8' || encodingId === 'utf-8-bom') {
+    return decodeUtf8(bytes, mayEndMidCharacter)
+  }
+  const spec = encodingById(encodingId)
+  const maxTrim = mayEndMidCharacter ? Math.min(4, bytes.byteLength) : 0
+  for (let trim = 0; trim <= maxTrim; trim += 1) {
+    try {
+      return new TextDecoder(spec.decodeLabel, { fatal: true }).decode(bytes.subarray(0, bytes.byteLength - trim))
+    } catch {
+      // A truncated multi-byte sequence can occupy up to four bytes; try the next shorter prefix.
+    }
+  }
+  return undefined
+}
+
+/**
+ * Encode text into bytes for `encodingId`. ASCII replaces non-ASCII characters
+ * with '?' (lenient), matching iconv-lite's replacement behaviour for
+ * unmappable characters in the other legacy encodings.
+ */
+function encodeText(text, encodingId) {
+  if (encodingId === 'utf-8') return Buffer.from(text, 'utf8')
+  if (encodingId === 'utf-8-bom') {
+    return Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(text, 'utf8')])
+  }
+  if (encodingId === 'ascii') {
+    return Buffer.from(text.replace(/[^\x00-\x7f]/g, '?'), 'latin1')
+  }
+  const spec = encodingById(encodingId)
+  let body = iconv.encode(text, spec.encode)
+  if (encodingId === 'utf-16le') body = Buffer.concat([Buffer.from([0xff, 0xfe]), body])
+  else if (encodingId === 'utf-16be') body = Buffer.concat([Buffer.from([0xfe, 0xff]), body])
+  return body
+}
+
+/** The encoding id to save back with, preserving a UTF-8 BOM when present. */
+function effectiveReadEncoding(requestedId, bom) {
+  if (requestedId === 'utf-8' && bom) return 'utf-8-bom'
+  return requestedId
+}
+
+function textMetadata(bytes, content, encodingId = 'utf-8') {
+  const bom = hasBom(bytes, encodingId)
   const crlf = (content.match(/\r\n/g) ?? []).length
   const withoutCrlf = content.replace(/\r\n/g, '')
   const lf = (withoutCrlf.match(/\n/g) ?? []).length
@@ -413,8 +496,9 @@ async function readPrefix(target, length) {
   return buffer.subarray(0, offset)
 }
 
-async function readPreview(workspace, relativePath, config) {
+async function readPreview(workspace, relativePath, config, encodingId = 'utf-8') {
   if (relativePath === '') throw new HttpError(400, 'not-a-file', '请选择要预览的文件')
+  const spec = encodingById(encodingId)
   const root = await realpath(workspace.path)
   const target = await resolveWorkspacePath(root, relativePath)
   const targetStat = await stat(target)
@@ -423,10 +507,12 @@ async function readPreview(workspace, relativePath, config) {
   const buffer = await readPrefix(target, requested)
   const truncated = targetStat.size > config.maxPreviewBytes
   const previewBytes = buffer.subarray(0, Math.min(buffer.byteLength, config.maxPreviewBytes))
-  if (containsNul(previewBytes)) throw new HttpError(415, 'binary-file', '该文件包含二进制内容，无法进行文本预览')
-  const content = decodeUtf8(previewBytes, truncated)
-  if (content === undefined) throw new HttpError(415, 'binary-file', '该文件不是有效的 UTF-8 文本，无法预览')
-  const metadata = textMetadata(previewBytes, content)
+  const isUtf16 = encodingId === 'utf-16le' || encodingId === 'utf-16be'
+  if (!isUtf16 && containsNul(previewBytes)) throw new HttpError(415, 'binary-file', '该文件包含二进制内容，无法进行文本预览')
+  const content = decodeBytes(previewBytes, encodingId, truncated)
+  if (content === undefined) throw new HttpError(415, 'invalid-encoding', `该文件不是有效的 ${spec.label} 编码，无法预览`)
+  const metadata = textMetadata(previewBytes, content, encodingId)
+  const effectiveEncoding = effectiveReadEncoding(encodingId, metadata.bom)
   let readOnlyReason
   if (!config.enableEditing) readOnlyReason = 'editing-disabled'
   else if (truncated) readOnlyReason = 'preview-truncated'
@@ -435,7 +521,7 @@ async function readPreview(workspace, relativePath, config) {
   else if (await hasSymlinkComponent(root, relativePath)) readOnlyReason = 'symlink-path'
   const result = {
     workspaceId: String(workspace.id), path: relativePath, content, size: targetStat.size,
-    truncated, encoding: 'utf-8', editable: readOnlyReason === undefined,
+    truncated, encoding: effectiveEncoding, editable: readOnlyReason === undefined,
     readOnlyReason: readOnlyReason ?? null, maxContextBytes: config.maxContextBytes, ...metadata,
   }
   if (!truncated) result.revision = revisionFor(previewBytes)
@@ -491,7 +577,7 @@ async function serializeWrite(queues, key, operation) {
   }
 }
 
-async function saveFile(workspace, relativePath, config, queues, req) {
+async function saveFile(workspace, relativePath, config, queues, req, encodingId = 'utf-8') {
   if (!config.enableEditing) throw new HttpError(403, 'editing-disabled', '当前未启用文件编辑')
   if (relativePath === '') throw new HttpError(400, 'not-a-file', '请选择要保存的文件')
   const contentType = header(req.headers, 'content-type')?.toLowerCase().replace(/\s/g, '')
@@ -522,9 +608,11 @@ async function saveFile(workspace, relativePath, config, queues, req) {
   if (declared !== undefined && bytes.byteLength !== declared) {
     throw new HttpError(400, 'content-length-mismatch', '请求正文长度与 Content-Length 不一致')
   }
-  if (containsNul(bytes) || decodeUtf8(bytes, false) === undefined) {
+  const text = decodeUtf8(bytes, false)
+  if (text === undefined || containsNul(bytes)) {
     throw new HttpError(415, 'invalid-text', '保存内容必须是无二进制数据的有效 UTF-8 文本')
   }
+  const outBytes = encodeText(text, encodingId)
 
   // This in-process route provides application-level containment for trusted local UI actions.
   // Fresh canonical checks narrow path replacement races; kernel isolation of hostile concurrent
@@ -546,7 +634,11 @@ async function saveFile(workspace, relativePath, config, queues, req) {
     } finally {
       await current.close()
     }
-    if (containsNul(currentBytes) || decodeUtf8(currentBytes, false) === undefined) {
+    const isUtf16 = encodingId === 'utf-16le' || encodingId === 'utf-16be'
+    if (containsNul(currentBytes) && !isUtf16) {
+      throw new HttpError(415, 'binary-file', '现有文件包含二进制内容，不能保存')
+    }
+    if (encodingId === 'utf-8' && decodeUtf8(currentBytes, false) === undefined) {
       throw new HttpError(415, 'binary-file', '现有文件不是可编辑的 UTF-8 文本')
     }
     if (revisionFor(currentBytes) !== ifMatch) throw new HttpError(409, 'file-conflict', '文件已被修改，请重新加载后再保存')
@@ -563,7 +655,7 @@ async function saveFile(workspace, relativePath, config, queues, req) {
       tempHandle = await open(temp, 'wx', targetStat.mode & 0o777)
       tempCreated = true
       await tempHandle.chmod(targetStat.mode & 0o777)
-      await tempHandle.writeFile(bytes)
+      await tempHandle.writeFile(outBytes)
       await tempHandle.sync()
       await tempHandle.close()
       tempHandle = undefined
@@ -585,7 +677,7 @@ async function saveFile(workspace, relativePath, config, queues, req) {
         })
       }
     }
-    return { workspaceId: String(workspace.id), path: relativePath, revision: revisionFor(bytes), size: bytes.byteLength }
+    return { workspaceId: String(workspace.id), path: relativePath, revision: revisionFor(outBytes), size: outBytes.byteLength, encoding: encodingId, bom: hasBom(outBytes, encodingId) }
   })
 }
 
@@ -964,31 +1056,38 @@ async function handleRequest(ctx, config, trustedHosts, writeQueues, req, res) {
   try {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
     const contextEndpoint = url.pathname === `${API_PREFIX}/context`
+    const encodingsEndpoint = url.pathname === `${API_PREFIX}/encodings`
     const entryEndpoint = url.pathname === `${API_PREFIX}/entry`
     const fileEndpoint = url.pathname === `${API_PREFIX}/file`
     const treeEndpoint = url.pathname === `${API_PREFIX}/tree`
     const searchEndpoint = url.pathname === `${API_PREFIX}/search`
     const allowed = contextEndpoint
       ? 'POST'
-      : entryEndpoint
-        ? 'POST, PATCH'
-        : fileEndpoint
-          ? 'GET, HEAD, PUT'
-          : treeEndpoint
-            ? 'GET, HEAD'
-            : searchEndpoint
+      : encodingsEndpoint
+        ? 'GET, HEAD'
+        : entryEndpoint
+          ? 'POST, PATCH'
+          : fileEndpoint
+            ? 'GET, HEAD, PUT'
+            : treeEndpoint
               ? 'GET, HEAD'
-              : undefined
+              : searchEndpoint
+                ? 'GET, HEAD'
+                : undefined
     if (allowed !== undefined && !allowed.split(', ').includes(req.method ?? '')) {
       sendError(req, res, 405, 'method-not-allowed', `该接口只允许 ${allowed} 请求`, { allow: allowed })
       return
     }
-    if (!contextEndpoint && !entryEndpoint && !fileEndpoint && !treeEndpoint && !searchEndpoint) {
+    if (!contextEndpoint && !encodingsEndpoint && !entryEndpoint && !fileEndpoint && !treeEndpoint && !searchEndpoint) {
       sendError(req, res, 404, 'endpoint-not-found', '接口不存在')
       return
     }
     if (contextEndpoint) {
       sendJson(req, res, 200, await renderPromptContext(ctx, config, req))
+      return
+    }
+    if (encodingsEndpoint) {
+      sendJson(req, res, 200, { encodings: ENCODINGS.map(({ id, label }) => ({ id, label })) })
       return
     }
     const workspaceId = requiredQuery(url, 'workspaceId')
@@ -1007,6 +1106,7 @@ async function handleRequest(ctx, config, trustedHosts, writeQueues, req, res) {
       return
     }
     const relativePath = normalizeRelativePath(url.searchParams.get('path') ?? '')
+    const encodingId = url.searchParams.get('encoding') ?? 'utf-8'
     if (entryEndpoint && req.method === 'POST') {
       sendJson(req, res, 200, await createEntry(workspace, relativePath, config, writeQueues, req))
     } else if (entryEndpoint) {
@@ -1014,9 +1114,9 @@ async function handleRequest(ctx, config, trustedHosts, writeQueues, req, res) {
     } else if (treeEndpoint) {
       sendJson(req, res, 200, await listTree(workspace, relativePath, config.maxEntriesPerDirectory))
     } else if (req.method === 'PUT') {
-      sendJson(req, res, 200, await saveFile(workspace, relativePath, config, writeQueues, req))
+      sendJson(req, res, 200, await saveFile(workspace, relativePath, config, writeQueues, req, encodingId))
     } else {
-      sendJson(req, res, 200, await readPreview(workspace, relativePath, config))
+      sendJson(req, res, 200, await readPreview(workspace, relativePath, config, encodingId))
     }
   } catch (error) {
     const failure = normalizeFailure(error)

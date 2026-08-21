@@ -1,10 +1,11 @@
 import React from 'react'
+import { createPortal } from 'react-dom'
 import { createSnapshotStore, defineStore } from '@deepseek-ai/dsh-client-runtime/client'
 import { EditorState, Compartment } from '@codemirror/state'
 import { EditorView, drawSelection, dropCursor, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search'
-import { bracketMatching, defaultHighlightStyle, foldGutter, foldKeymap, HighlightStyle, indentOnInput, syntaxHighlighting, StreamLanguage } from '@codemirror/language'
+import { bracketMatching, defaultHighlightStyle, foldable, foldEffect, foldGutter, foldKeymap, HighlightStyle, indentOnInput, syntaxHighlighting, StreamLanguage, unfoldAll } from '@codemirror/language'
 import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete'
 import { tags } from '@lezer/highlight'
 import { javascript } from '@codemirror/lang-javascript'
@@ -26,6 +27,7 @@ import { powerShell } from '@codemirror/legacy-modes/mode/powershell'
 import { ruby } from '@codemirror/legacy-modes/mode/ruby'
 import { toml } from '@codemirror/legacy-modes/mode/toml'
 import { dockerFile } from '@codemirror/legacy-modes/mode/dockerfile'
+import { clike } from '@codemirror/legacy-modes/mode/clike'
 
 const { Fragment, createElement: h, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } = React
 const PACKAGE_ID = '@deepseek-ai/dsh-client-ui-workspace-explorer-layout'
@@ -33,6 +35,7 @@ const API_PREFIX = '/workspace-explorer-layout/api'
 const EDITOR_CONTEXT_PROVIDER = 'workspace-editor-context'
 const SEND_SESSION_BRIDGE_MARKER = Symbol('workspace-explorer-layout.send-session-bridge')
 const PREVIEW_SESSION_STORE_KEY = 'dsh.workspace.explorer.preview-sessions.v1'
+const PREVIEW_SESSION_MAX = 25
 const SIDEBAR_DEFAULT = 280, SIDEBAR_COLLAPSED = 56, SIDEBAR_MIN = 240, SIDEBAR_MAX_RATIO = 0.8, SIDEBAR_MAX_FALLBACK = 420
 const EXPLORER_MAX_RATIO = 0.8
 const TREE_DEFAULT = 280, TREE_MIN = 220, TREE_MAX = 520
@@ -41,21 +44,68 @@ const CONTEXT_MENU_WIDTH = 176, CONTEXT_MENU_HEIGHT = 84
 const ROW_HEIGHT_DEFAULT = 28, ROW_HEIGHT_MIN = 20, ROW_HEIGHT_MAX = 48
 const CHAT_FONT_SIZE_DEFAULT = 16, CHAT_FONT_SIZE_MIN = 13, CHAT_FONT_SIZE_MAX = 20
 const EXPLORER_SETTINGS_STORE_KEY = 'dsh.workspace.explorer.settings.v1'
+const EXPLORER_LAYOUT_STORE_KEY = 'dsh.workspace.explorer.layout.v1'
+
+/* File encodings offered by the right-click encoding actions. The server owns
+ * the authoritative list (/api/encodings); this fallback mirrors it so the
+ * menu and badge work even before (or without) the fetch succeeding. */
+const ENCODING_FALLBACK = Object.freeze([
+  { id: 'utf-8', label: 'UTF-8' },
+  { id: 'utf-8-bom', label: 'UTF-8（带 BOM）' },
+  { id: 'utf-16le', label: 'UTF-16 LE' },
+  { id: 'utf-16be', label: 'UTF-16 BE' },
+  { id: 'gbk', label: 'GBK' },
+  { id: 'gb18030', label: 'GB18030' },
+  { id: 'big5', label: 'Big5' },
+  { id: 'shift_jis', label: 'Shift_JIS' },
+  { id: 'euc-jp', label: 'EUC-JP' },
+  { id: 'euc-kr', label: 'EUC-KR' },
+  { id: 'iso-8859-1', label: 'ISO-8859-1（Latin-1）' },
+  { id: 'windows-1252', label: 'Windows-1252' },
+  { id: 'windows-1251', label: 'Windows-1251（西里尔）' },
+  { id: 'ascii', label: 'ASCII' },
+])
+const ENCODING_LABEL_FALLBACK = Object.fromEntries(ENCODING_FALLBACK.map(encoding => [encoding.id, encoding.label]))
+let encodingCache = ENCODING_FALLBACK
+/* Fetch the server's authoritative encoding list once; keep the fallback if
+ * the request fails so the encoding actions never dead-end. */
+async function fetchEncodings() {
+  try {
+    const response = await fetch(`${API_PREFIX}/encodings`, { method: 'GET', headers: { accept: 'application/json' }, credentials: 'same-origin' })
+    if (!response.ok) return encodingCache
+    const payload = await response.json()
+    const list = Array.isArray(payload?.encodings)
+      ? payload.encodings.filter(encoding => typeof encoding?.id === 'string' && typeof encoding?.label === 'string')
+      : []
+    if (list.length > 0) encodingCache = list
+  } catch {
+    // keep the built-in fallback
+  }
+  return encodingCache
+}
+function encodingLabel(id) {
+  const found = encodingCache.find(encoding => encoding.id === id)
+  if (found !== undefined) return found.label
+  return ENCODING_LABEL_FALLBACK[id] ?? String(id ?? '')
+}
 
 const styles = `
 .dsh-wel-viewport{height:100%;min-width:0;overflow:auto;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}
-.dsh-wel-frame{--dsh-wel-sidebar:280px;--dsh-wel-tree:280px;--dsh-wel-preview:420px;position:relative;display:grid;grid-template-columns:var(--dsh-wel-sidebar) var(--dsh-wel-tree) var(--dsh-wel-preview) minmax(0,1fr);grid-template-rows:100%;width:100%;min-width:0;height:100%;overflow:hidden;background:var(--dsw-alias-bg-base);transition:grid-template-columns var(--ds-transition-duration-slow) var(--ds-ease-in-out)}
+.dsh-wel-frame{--dsh-wel-sidebar:280px;--dsh-wel-preview:420px;position:relative;display:grid;grid-template-columns:var(--dsh-wel-sidebar) var(--dsh-wel-preview) minmax(0,1fr);grid-template-rows:100%;width:100%;min-width:0;height:100%;overflow:hidden;background:var(--dsw-alias-bg-base);transition:grid-template-columns var(--ds-transition-duration-slow) var(--ds-ease-in-out)}
 .dsh-wel-frame[data-resizing]{transition:none;user-select:none}.dsh-wel-sidebar,.dsh-wel-tree,.dsh-wel-preview,.dsh-wel-chat{min-width:0;height:100%;overflow:hidden}.dsh-wel-sidebar{background:var(--dsw-specific-sidebar-fill);border-right:1px solid var(--dsw-alias-border-l1)}
 .dsh-wel-tree,.dsh-wel-preview{display:flex;flex-direction:column;background:var(--dsw-alias-bg-layer-1);border-right:1px solid var(--dsw-alias-border-l2)}.dsh-wel-frame[data-explorer-closed] .dsh-wel-tree,.dsh-wel-frame[data-explorer-closed] .dsh-wel-preview{visibility:hidden;pointer-events:none;border-right:0}.dsh-wel-chat{display:flex;flex-direction:column;background:var(--dsw-alias-bg-base)}
 .dsh-wel-panel-header{display:flex;align-items:center;gap:8px;min-height:52px;padding:0 12px;border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);box-sizing:border-box}.dsh-wel-panel-title{min-width:0;display:flex;flex:1;flex-direction:column;gap:2px}.dsh-wel-panel-title strong{overflow:hidden;color:var(--dsw-alias-label-primary);font-size:13px;line-height:18px;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-panel-title>span{overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:15px;text-overflow:ellipsis;white-space:nowrap}
+/* Preview page top rows (file tabs + active-file name) share the harness left
+   sidebar fill so the file browsing page reads as one band with the sidebar. */
+.dsh-wel-preview .dsh-wel-panel-header{background:var(--dsw-specific-sidebar-fill)}
 .dsh-wel-panel-actions{display:flex;flex:none;align-items:center;gap:2px}.dsh-wel-icon-button,.dsh-wel-text-button{display:inline-flex;align-items:center;justify-content:center;height:30px;padding:0 8px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer}.dsh-wel-icon-button{width:30px;padding:0;font-size:18px}.dsh-wel-icon-button svg{display:block;width:16px;height:16px}.dsh-wel-icon-button:hover,.dsh-wel-text-button:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsh-wel-icon-button:disabled,.dsh-wel-text-button:disabled{cursor:not-allowed;opacity:.55}
 .dsh-wel-icon-button:focus-visible,.dsh-wel-text-button:focus-visible,.dsh-wel-tree-row:focus-visible,.dsh-wel-preview-tab-button:focus-visible,.dsh-wel-preview-tab-close:focus-visible,.dsh-wel-splitter:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-2px}.dsh-wel-tree-scroll{flex:1;min-height:0;overflow:auto;padding:8px 6px 16px}.dsh-wel-tree-row{display:flex;align-items:center;gap:5px;width:100%;height:var(--dsh-wel-row-height,28px);padding:0 7px 0 calc(7px + var(--dsh-wel-depth,0) * 15px);border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:18px;text-align:left;cursor:pointer;box-sizing:border-box}.dsh-wel-tree-row:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsh-wel-tree-row[data-selected]{background:var(--dsw-alias-interactive-bg-active);color:var(--dsw-alias-label-primary)}.dsh-wel-tree-row:disabled{cursor:not-allowed;opacity:.55}
-.dsh-wel-chevron{display:inline-flex;align-items:center;justify-content:center;flex:0 0 12px;color:var(--dsw-alias-label-caption);font-size:10px}.dsh-wel-file-mark{display:inline-flex;align-items:center;justify-content:center;flex:0 0 16px;width:16px;height:16px;border-radius:4px;background:color-mix(in srgb,var(--dsh-wel-file-accent,var(--dsw-alias-label-tertiary)) 16%,transparent);color:var(--dsh-wel-file-accent,var(--dsw-alias-label-tertiary));font-size:8px;font-weight:600;text-transform:uppercase}.dsh-wel-file-mark[data-group='directory']{--dsh-wel-file-accent:var(--dsh-wel-file-directory,#3b82f6)}.dsh-wel-file-mark[data-group='typescript']{--dsh-wel-file-accent:var(--dsh-wel-file-typescript,#3178c6)}.dsh-wel-file-mark[data-group='javascript']{--dsh-wel-file-accent:var(--dsh-wel-file-javascript,#e5c158)}.dsh-wel-file-mark[data-group='json']{--dsh-wel-file-accent:var(--dsh-wel-file-json,#e07a3c)}.dsh-wel-file-mark[data-group='markup']{--dsh-wel-file-accent:var(--dsh-wel-file-markup,#e04a3c)}.dsh-wel-file-mark[data-group='style']{--dsh-wel-file-accent:var(--dsh-wel-file-style,#a855f7)}.dsh-wel-file-mark[data-group='markdown']{--dsh-wel-file-accent:var(--dsh-wel-file-markdown,#12a5a0)}.dsh-wel-file-mark[data-group='log']{--dsh-wel-file-accent:var(--dsh-wel-file-log,#d99a2b)}.dsh-wel-file-mark[data-group='python']{--dsh-wel-file-accent:var(--dsh-wel-file-python,#4b8bb8)}.dsh-wel-file-mark[data-group='shell']{--dsh-wel-file-accent:var(--dsh-wel-file-shell,#22a06b)}.dsh-wel-file-mark[data-group='config']{--dsh-wel-file-accent:var(--dsh-wel-file-config,#8a95a5)}.dsh-wel-file-mark[data-group='c-family']{--dsh-wel-file-accent:var(--dsh-wel-file-c-family,#5a7ba6)}.dsh-wel-file-mark[data-group='other']{--dsh-wel-file-accent:var(--dsh-wel-file-other,#9aa3ad)}.dsh-wel-file-mark[data-group='blocked']{--dsh-wel-file-accent:var(--dsh-wel-file-blocked,#e5484d)}.dsh-wel-row-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-symlink{margin-left:auto;color:var(--dsw-alias-label-caption);font-size:10px}.dsh-wel-tree-status{padding:8px 10px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}.dsh-wel-tree-status[data-error]{color:var(--dsw-alias-state-error-primary)}.dsh-wel-empty{display:flex;flex:1;min-height:0;align-items:center;justify-content:center;padding:24px;color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:20px;text-align:center}
-.dsh-wel-preview-header-meta{display:flex;align-items:center;gap:6px;min-width:0}.dsh-wel-preview-header-meta>span:not(.dsh-wel-language){overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:15px;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-language{flex:0 0 auto;padding:1px 5px;border-radius:4px;background:var(--dsw-alias-markdown-tag);color:var(--dsw-alias-label-secondary);font-size:9px;font-weight:600;line-height:14px;text-transform:uppercase}.dsh-wel-dirty{color:var(--dsw-alias-state-warn-label);font-size:12px}.dsh-wel-preview-tabs{display:flex;align-items:stretch;gap:4px;min-width:0;padding:6px 8px;border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);overflow-x:auto;overflow-y:hidden;scrollbar-width:thin}.dsh-wel-preview-tab{flex:none;display:flex;align-items:center;gap:5px;min-width:0;max-width:220px;height:28px;padding:0 5px 0 9px;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:18px;cursor:grab;box-sizing:border-box;white-space:nowrap}.dsh-wel-preview-tab:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsh-wel-preview-tab[data-active]{background:var(--dsw-alias-interactive-bg-active);color:var(--dsw-alias-label-primary)}.dsh-wel-preview-tab[data-dragging]{opacity:.7}.dsh-wel-preview-drop-indicator{flex:none;width:3px;height:20px;border-radius:2px;background:var(--dsw-alias-state-business-primary);align-self:center;pointer-events:none}.dsh-wel-preview-tab-button{display:flex;flex:1;align-items:center;gap:5px;min-width:0;height:100%;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}.dsh-wel-preview-tab-name{min-width:0;overflow:hidden;text-overflow:ellipsis}.dsh-wel-preview-tab-close{flex:none;display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border:0;border-radius:4px;background:transparent;color:inherit;font-size:14px;line-height:1;cursor:pointer}.dsh-wel-preview-tab-close:hover{background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary)}.dsh-wel-preview-tab-close:disabled{cursor:not-allowed;opacity:.45}.dsh-wel-preview-body{position:relative;flex:1;min-height:0;overflow:hidden;background:var(--dsw-alias-markdown-code-block)}.dsh-wel-editor-host{height:100%;min-width:0}.dsh-wel-editor-host .cm-editor{height:100%;background:var(--dsw-alias-markdown-code-block);color:var(--dsw-alias-label-primary)}.dsh-wel-editor-host .cm-scroller{font-family:var(--dsw-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:12px;line-height:19px;overflow:auto}.dsh-wel-editor-host .cm-gutters{background:var(--dsw-alias-markdown-code-block-banner);color:var(--dsw-alias-label-caption);border-right:1px solid var(--dsw-alias-border-l2)}.dsh-wel-editor-host .cm-activeLine,.dsh-wel-editor-host .cm-activeLineGutter{background:var(--dsw-alias-interactive-bg-hover)}.dsh-wel-editor-host .cm-selectionBackground,.dsh-wel-editor-host .cm-content ::selection{background:var(--dsw-alias-interactive-bg-active)!important}.dsh-wel-editor-host .cm-cursor{border-left-color:var(--dsw-alias-label-primary)}.dsh-wel-editor-host .cm-foldPlaceholder{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary)}.dsh-wel-editor-host .cm-panels{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}.dsh-wel-editor-host .cm-panel input{background:var(--dsw-alias-bg-base);border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary)}
+.dsh-wel-chevron{display:inline-flex;align-items:center;justify-content:center;flex:0 0 12px;color:var(--dsw-alias-label-caption);font-size:10px}.dsh-wel-file-mark{display:inline-flex;align-items:center;justify-content:center;flex:0 0 16px;width:16px;height:16px;border-radius:4px;background:color-mix(in srgb,var(--dsh-wel-file-accent,var(--dsw-alias-label-tertiary)) 16%,transparent);color:var(--dsh-wel-file-accent,var(--dsw-alias-label-tertiary));font-size:8px;font-weight:600;text-transform:uppercase}.dsh-wel-file-mark[data-group='directory']{--dsh-wel-file-accent:var(--dsh-wel-file-directory,#3b82f6)}.dsh-wel-file-mark[data-group='typescript']{--dsh-wel-file-accent:var(--dsh-wel-file-typescript,#3178c6)}.dsh-wel-file-mark[data-group='javascript']{--dsh-wel-file-accent:var(--dsh-wel-file-javascript,#e5c158)}.dsh-wel-file-mark[data-group='json']{--dsh-wel-file-accent:var(--dsh-wel-file-json,#e07a3c)}.dsh-wel-file-mark[data-group='markup']{--dsh-wel-file-accent:var(--dsh-wel-file-markup,#e04a3c)}.dsh-wel-file-mark[data-group='style']{--dsh-wel-file-accent:var(--dsh-wel-file-style,#a855f7)}.dsh-wel-file-mark[data-group='markdown']{--dsh-wel-file-accent:var(--dsh-wel-file-markdown,#12a5a0)}.dsh-wel-file-mark[data-group='log']{--dsh-wel-file-accent:var(--dsh-wel-file-log,#d99a2b)}.dsh-wel-file-mark[data-group='python']{--dsh-wel-file-accent:var(--dsh-wel-file-python,#4b8bb8)}.dsh-wel-file-mark[data-group='shell']{--dsh-wel-file-accent:var(--dsh-wel-file-shell,#22a06b)}.dsh-wel-file-mark[data-group='config']{--dsh-wel-file-accent:var(--dsh-wel-file-config,#8a95a5)}.dsh-wel-file-mark[data-group='c-family']{--dsh-wel-file-accent:var(--dsh-wel-file-c-family,#5a7ba6)}.dsh-wel-file-mark[data-group='csharp']{--dsh-wel-file-accent:var(--dsh-wel-file-csharp,#a25fd0)}.dsh-wel-file-mark[data-group='other']{--dsh-wel-file-accent:var(--dsh-wel-file-other,#9aa3ad)}.dsh-wel-file-mark[data-group='blocked']{--dsh-wel-file-accent:var(--dsh-wel-file-blocked,#e5484d)}.dsh-wel-row-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-symlink{margin-left:auto;color:var(--dsw-alias-label-caption);font-size:10px}.dsh-wel-tree-status{padding:8px 10px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}.dsh-wel-tree-status[data-error]{color:var(--dsw-alias-state-error-primary)}.dsh-wel-empty{display:flex;flex:1;min-height:0;align-items:center;justify-content:center;padding:24px;color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:20px;text-align:center}
+.dsh-wel-preview-header-meta{display:flex;align-items:center;gap:6px;min-width:0}.dsh-wel-preview-header-meta>span:not(.dsh-wel-language):not(.dsh-wel-encoding){overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:15px;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-language{flex:0 0 auto;padding:1px 5px;border-radius:4px;background:var(--dsw-alias-markdown-tag);color:var(--dsw-alias-label-secondary);font-size:9px;font-weight:600;line-height:14px;text-transform:uppercase}.dsh-wel-encoding{flex:0 0 auto;padding:1px 5px;border-radius:4px;background:var(--dsw-alias-markdown-tag);color:var(--dsw-alias-label-secondary);font-size:9px;font-weight:600;line-height:14px;text-transform:uppercase}.dsh-wel-dirty{color:var(--dsw-alias-state-warn-label);font-size:12px}.dsh-wel-preview-tabs{display:flex;align-items:stretch;gap:4px;min-width:0;padding:6px 8px;border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-specific-sidebar-fill);overflow-x:auto;overflow-y:hidden;scrollbar-width:thin}.dsh-wel-preview-tab{flex:none;display:flex;align-items:center;gap:5px;min-width:0;max-width:220px;height:28px;padding:0 5px 0 9px;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:18px;cursor:grab;box-sizing:border-box;white-space:nowrap}.dsh-wel-preview-tab:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsh-wel-preview-tab[data-active]{background:var(--dsw-alias-interactive-bg-active);color:var(--dsw-alias-label-primary)}.dsh-wel-preview-tab[data-dragging]{opacity:.7}.dsh-wel-preview-drop-indicator{flex:none;width:3px;height:20px;border-radius:2px;background:var(--dsw-alias-state-business-primary);align-self:center;pointer-events:none}.dsh-wel-preview-tab-button{display:flex;flex:1;align-items:center;gap:5px;min-width:0;height:100%;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}.dsh-wel-preview-tab-name{min-width:0;overflow:hidden;text-overflow:ellipsis}.dsh-wel-preview-tab-close{flex:none;display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border:0;border-radius:4px;background:transparent;color:inherit;font-size:14px;line-height:1;cursor:pointer}.dsh-wel-preview-tab-close:hover{background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary)}.dsh-wel-preview-tab-close:disabled{cursor:not-allowed;opacity:.45}.dsh-wel-preview-body{position:relative;flex:1;min-height:0;overflow:hidden;background:var(--dsw-alias-markdown-code-block)}.dsh-wel-editor-host{height:100%;min-width:0}.dsh-wel-editor-host .cm-editor{height:100%;background:var(--dsw-alias-markdown-code-block);color:var(--dsw-alias-label-primary)}.dsh-wel-editor-host .cm-scroller{font-family:var(--dsw-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:12px;line-height:19px;overflow:auto}.dsh-wel-editor-host .cm-gutters{background:var(--dsw-alias-markdown-code-block-banner);color:var(--dsw-alias-label-caption);border-right:1px solid var(--dsw-alias-border-l2)}.dsh-wel-editor-host .cm-activeLine,.dsh-wel-editor-host .cm-activeLineGutter{background:var(--dsw-alias-interactive-bg-hover)}.dsh-wel-editor-host .cm-selectionBackground,.dsh-wel-editor-host .cm-content ::selection{background:var(--dsw-alias-interactive-bg-active)!important}.dsh-wel-editor-host .cm-cursor{border-left-color:var(--dsw-alias-label-primary)}.dsh-wel-editor-host .cm-foldPlaceholder{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary)}.dsh-wel-editor-host .cm-panels{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}.dsh-wel-editor-host .cm-panel input{background:var(--dsw-alias-bg-base);border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary)}
 .dsh-wel-context-row{box-sizing:border-box;display:flex;align-items:center;gap:8px;flex:none;width:min(var(--dsh-composer-card-max-width),max(0px,calc(100% - (var(--dsh-composer-side-clearance) * 2))));margin:0 auto;padding:0}.dsh-wel-context-prefix{display:flex;flex:1;align-items:center;gap:6px;min-width:0;min-height:28px;padding:5px 8px 5px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:22px;background:var(--dsw-specific-input-major);color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;line-height:16px;text-align:left;cursor:pointer}.dsh-wel-context-prefix:hover{color:var(--dsw-alias-label-primary)}.dsh-wel-context-prefix:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}.dsh-wel-context-prefix[data-inactive]{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-caption);filter:grayscale(1)}.dsh-wel-context-prefix-mark{flex:none;font-size:12px}.dsh-wel-context-prefix-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-message-context-summary{box-sizing:border-box;display:flex;align-items:center;align-self:flex-end;gap:6px;max-width:100%;min-height:24px;padding:3px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:22px;background:var(--dsw-specific-input-major);color:var(--dsw-alias-label-secondary);font-size:11px;line-height:16px}.dsh-wel-message-context-summary-mark{flex:none;font-size:12px}.dsh-wel-message-context-summary-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-message-context-summary-range{flex:none;color:var(--dsw-alias-label-caption)}.dsh-wel-message-context-bubble[data-dsh-wel-empty-prompt]{display:none}
 .dsh-wel-banner{padding:7px 12px;border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-state-warn-tertiary);color:var(--dsw-alias-state-warn-label);font-size:11px;line-height:16px}.dsh-wel-banner-actions{display:flex;gap:6px;margin-top:5px}.dsh-wel-status{padding:5px 12px;border-bottom:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-tertiary);font-size:11px}.dsh-wel-status[data-error]{color:var(--dsw-alias-state-error-primary)}.dsh-wel-error-card{max-width:300px;padding:14px 16px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:19px;text-align:left}.dsh-wel-dialog-backdrop{position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;padding:20px;background:var(--dsw-alias-bg-mask-1,rgba(0,0,0,.38));box-sizing:border-box}.dsh-wel-dialog{width:min(360px,100%);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-elevated,0 12px 36px rgba(0,0,0,.24));box-sizing:border-box}.dsh-wel-dialog-header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 14px;border-bottom:1px solid var(--dsw-alias-border-l2)}.dsh-wel-dialog-title{min-width:0;overflow:hidden;color:var(--dsw-alias-label-primary);font-size:13px;font-weight:600;line-height:18px;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-dialog-body{display:flex;flex-direction:column;gap:8px;padding:14px}.dsh-wel-dialog-input{width:100%;height:32px;padding:0 9px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;box-sizing:border-box}.dsh-wel-dialog-input:focus{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-1px}.dsh-wel-dialog-error{color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:18px}.dsh-wel-dialog-footer{display:flex;justify-content:flex-end;gap:8px;padding:0 14px 14px}
 .dsh-wel-frame [data-slot='sidebar.footer.action']{display:flex!important;flex-direction:column;align-items:stretch;width:100%;min-width:0}.dsh-wel-explorer-toggle{flex:none;display:flex;align-items:center;gap:8px;width:calc(100% + 8px);height:34px;margin:4px -4px 4px;padding:6px 2px 6px 10px;box-sizing:border-box;border:0;border-radius:12px;background:transparent;cursor:pointer;overflow:hidden;color:var(--dsw-alias-label-secondary);font-family:inherit;font-size:14px;line-height:22px;text-align:left}.dsh-wel-explorer-toggle:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsh-wel-explorer-toggle[data-open]{color:var(--dsw-alias-brand-primary)}.dsh-wel-explorer-toggle[data-rail]{width:36px;height:36px;margin:8px 0 10px;justify-content:center;gap:0;padding:0;border-radius:50%}.dsh-wel-explorer-toggle:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-2px}.dsh-wel-explorer-icon{flex:none;width:16px;height:16px}.dsh-wel-explorer-toggle[data-rail] .dsh-wel-explorer-icon{width:18px;height:18px}.dsh-wel-explorer-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.dsh-wel-splitter{position:absolute;top:0;bottom:0;z-index:8;width:8px;margin-left:-4px;border:0;background:transparent;cursor:col-resize;touch-action:none}.dsh-wel-splitter::after{content:'';position:absolute;top:0;bottom:0;left:3px;width:2px;background:transparent;transition:background var(--ds-transition-duration-fast) var(--ds-ease-in-out)}.dsh-wel-splitter:hover::after,.dsh-wel-splitter[data-dragging]::after,.dsh-wel-splitter:focus-visible::after{background:var(--dsw-alias-state-business-primary)}.dsh-wel-details{position:absolute;z-index:16;top:0;right:0;bottom:0;width:min(440px,45vw);overflow:hidden;border-left:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-elevated,0 12px 36px var(--dsw-alias-bg-mask-1));transform:translateX(0);opacity:1;transition:transform var(--ds-transition-duration-slow) var(--ds-ease-in-out),opacity var(--ds-transition-duration-fast) var(--ds-ease-in-out)}.dsh-wel-details[data-closed]{pointer-events:none;visibility:hidden;transform:translateX(100%);opacity:0}.dsh-wel-overlay{position:absolute;inset:0;z-index:20;pointer-events:none}.dsh-wel-overlay>*{pointer-events:auto}.dsh-wel-tree{position:relative}.dsh-wel-context-menu{position:fixed;z-index:40;min-width:168px;padding:6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-elevated,0 12px 36px rgba(0,0,0,.24));box-sizing:border-box}.dsh-wel-context-item{display:block;width:100%;height:30px;padding:0 10px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:30px;text-align:left;cursor:pointer;box-sizing:border-box}.dsh-wel-context-item:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsh-wel-context-item:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-2px}.dsh-wel-copy-notice{position:absolute;right:10px;bottom:10px;z-index:12;padding:5px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-size:11px;line-height:16px;box-shadow:var(--dsw-shadow-elevated,0 4px 12px rgba(0,0,0,.18))}@media(prefers-reduced-motion:reduce){.dsh-wel-frame,.dsh-wel-details,.dsh-wel-splitter::after{transition:none}}
+.dsh-wel-splitter{position:absolute;top:0;bottom:0;z-index:8;width:8px;margin-left:-4px;border:0;background:transparent;cursor:col-resize;touch-action:none}.dsh-wel-splitter::after{content:'';position:absolute;top:0;bottom:0;left:3px;width:2px;background:transparent;transition:background var(--ds-transition-duration-fast) var(--ds-ease-in-out)}.dsh-wel-splitter:hover::after,.dsh-wel-splitter[data-dragging]::after,.dsh-wel-splitter:focus-visible::after{background:var(--dsw-alias-state-business-primary)}.dsh-wel-details{position:absolute;z-index:16;top:0;right:0;bottom:0;width:min(440px,45vw);overflow:hidden;border-left:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-elevated,0 12px 36px var(--dsw-alias-bg-mask-1));transform:translateX(0);opacity:1;transition:transform var(--ds-transition-duration-slow) var(--ds-ease-in-out),opacity var(--ds-transition-duration-fast) var(--ds-ease-in-out)}.dsh-wel-details[data-closed]{pointer-events:none;visibility:hidden;transform:translateX(100%);opacity:0}.dsh-wel-overlay{position:absolute;inset:0;z-index:20;pointer-events:none}.dsh-wel-overlay>*{pointer-events:auto}.dsh-wel-tree{position:relative}.dsh-wel-context-menu{position:fixed;z-index:40;min-width:168px;padding:6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-elevated,0 12px 36px rgba(0,0,0,.24));box-sizing:border-box}.dsh-wel-context-item{display:block;width:100%;height:30px;padding:0 10px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:30px;text-align:left;cursor:pointer;box-sizing:border-box}.dsh-wel-context-item:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsh-wel-context-item:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-2px}.dsh-wel-context-item:disabled{cursor:not-allowed;opacity:.5}.dsh-wel-context-item:disabled:hover{background:transparent;color:var(--dsw-alias-label-primary)}.dsh-wel-copy-notice{position:absolute;right:10px;bottom:10px;z-index:12;padding:5px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-size:11px;line-height:16px;box-shadow:var(--dsw-shadow-elevated,0 4px 12px rgba(0,0,0,.18))}@media(prefers-reduced-motion:reduce){.dsh-wel-frame,.dsh-wel-details,.dsh-wel-splitter::after{transition:none}}
 .dsh-wel-search-header{flex-direction:column;align-items:stretch;gap:8px;padding:8px}
 .dsh-wel-search-input-row{display:flex;align-items:center;gap:6px}
 .dsh-wel-search-input{flex:1;min-width:0;height:30px;padding:0 9px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;box-sizing:border-box}
@@ -63,6 +113,7 @@ const styles = `
 .dsh-wel-search-input::placeholder{color:var(--dsw-alias-label-caption)}
 .dsh-wel-search-case{width:34px;padding:0;font-size:11px;font-weight:600}
 .dsh-wel-icon-button[data-active]{background:var(--dsw-alias-interactive-bg-active);color:var(--dsw-alias-label-primary)}
+.dsh-wel-text-button[data-active]{background:var(--dsw-alias-interactive-bg-active);color:var(--dsw-alias-label-primary)}
 .dsh-wel-search-summary{padding:8px 10px 2px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
 .dsh-wel-search-file{margin:2px 0}
 .dsh-wel-search-file-header{display:flex;align-items:center;gap:6px;width:100%;min-height:26px;padding:3px 7px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:18px;text-align:left;cursor:pointer;box-sizing:border-box}
@@ -89,6 +140,63 @@ const styles = `
 .dsh-wel-chat [data-chat-flow-kind='assistant-step'] li > p{margin:calc(6px * var(--dsh-wel-chat-font-scale,1)) 0}
 .dsh-wel-preview-tab-close[data-pinned]{color:var(--dsw-alias-state-business-primary);width:22px;height:22px}
 .dsh-wel-preview-tab-close[data-pinned] svg{display:block;width:18px;height:18px}
+.dsh-wel-highlight-preset-select{flex:1;min-width:0;height:30px;padding:0 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;box-sizing:border-box}.dsh-wel-highlight-preset-select:focus{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-1px}
+.dsh-wel-editor-host[data-highlight-preset='classic']{--shiki-token-constant:#0451a5;--shiki-token-string:#a31515;--shiki-token-comment:#008000;--shiki-token-keyword:#0000ff;--shiki-token-parameter:#001080;--shiki-token-function:#795e26;--shiki-token-string-expression:#a31515;--shiki-token-punctuation:#000000;--shiki-token-link:#0000ff}
+body[data-ds-dark-theme] .dsh-wel-editor-host[data-highlight-preset='classic']{--shiki-token-constant:#4ec9b0;--shiki-token-string:#ce9178;--shiki-token-comment:#6a9955;--shiki-token-keyword:#569cd6;--shiki-token-parameter:#9cdcfe;--shiki-token-function:#dcdcaa;--shiki-token-string-expression:#ce9178;--shiki-token-punctuation:#d4d4d4;--shiki-token-link:#569cd6}
+.dsh-wel-editor-host[data-highlight-preset='warm']{--shiki-token-constant:#b4452c;--shiki-token-string:#8a5a00;--shiki-token-comment:#a06a4a;--shiki-token-keyword:#c2410c;--shiki-token-parameter:#d97706;--shiki-token-function:#be185d;--shiki-token-string-expression:#9a3412;--shiki-token-punctuation:#6b4a3f;--shiki-token-link:#9a3412}
+body[data-ds-dark-theme] .dsh-wel-editor-host[data-highlight-preset='warm']{--shiki-token-constant:#ff8a65;--shiki-token-string:#ffd54f;--shiki-token-comment:#c8a48c;--shiki-token-keyword:#ff9e6d;--shiki-token-parameter:#ffb74d;--shiki-token-function:#f472b6;--shiki-token-string-expression:#ffcc80;--shiki-token-punctuation:#e0c8bb;--shiki-token-link:#ffab91}
+.dsh-wel-editor-host[data-highlight-preset='cool']{--shiki-token-constant:#1971c2;--shiki-token-string:#0f766e;--shiki-token-comment:#6f7d94;--shiki-token-keyword:#364fc7;--shiki-token-parameter:#0b7285;--shiki-token-function:#7048e8;--shiki-token-string-expression:#099268;--shiki-token-punctuation:#49576b;--shiki-token-link:#1c7ed6}
+body[data-ds-dark-theme] .dsh-wel-editor-host[data-highlight-preset='cool']{--shiki-token-constant:#4dabf7;--shiki-token-string:#38d9a9;--shiki-token-comment:#8fa3c2;--shiki-token-keyword:#91a7ff;--shiki-token-parameter:#22b8cf;--shiki-token-function:#b197fc;--shiki-token-string-expression:#63e6be;--shiki-token-punctuation:#b6c2d6;--shiki-token-link:#74c0fc}
+.dsh-wel-editor-host[data-highlight-preset='mono']{--shiki-token-constant:#3f3f3f;--shiki-token-string:#2e2e2e;--shiki-token-comment:#9d9d9d;--shiki-token-keyword:#e8590c;--shiki-token-parameter:#565656;--shiki-token-function:#7a7a7a;--shiki-token-string-expression:#4a4a4a;--shiki-token-punctuation:#8a8a8a;--shiki-token-link:#a0a0a0}
+body[data-ds-dark-theme] .dsh-wel-editor-host[data-highlight-preset='mono']{--shiki-token-constant:#d0d0d0;--shiki-token-string:#e2e2e2;--shiki-token-comment:#6e6e6e;--shiki-token-keyword:#ffa94d;--shiki-token-parameter:#a8a8a8;--shiki-token-function:#bfbfbf;--shiki-token-string-expression:#cfcfcf;--shiki-token-punctuation:#8f8f8f;--shiki-token-link:#7d7d7d}
+/* VS Code default theme (Light+/Dark+) XML palette: tag names ride the
+   function token (tagName -> typeName), attribute names the parameter token
+   (attributeName -> propertyName), values/entities the string token, and the
+   two extra vars cover angle brackets and entity characters. */
+.dsh-wel-editor-host[data-highlight-preset='vscode-xml']{--shiki-token-comment:#008000;--shiki-token-function:#800000;--shiki-token-parameter:#e50000;--shiki-token-string:#a31515;--shiki-token-string-expression:#0000ff;--dsh-wel-token-xml-punctuation:#800000;--dsh-wel-token-xml-entity:#0000ff}
+body[data-ds-dark-theme] .dsh-wel-editor-host[data-highlight-preset='vscode-xml']{--shiki-token-comment:#6A9955;--shiki-token-function:#569cd6;--shiki-token-parameter:#9cdcfe;--shiki-token-string:#ce9178;--shiki-token-string-expression:#569cd6;--dsh-wel-token-xml-punctuation:#808080;--dsh-wel-token-xml-entity:#569cd6}
+/* VS Code default theme (Light+/Dark+) shared token palette: one rule serves
+   every non-XML vscode-* preset, since VS Code colors all languages with the
+   same theme. */
+.dsh-wel-editor-host[data-highlight-preset='vscode-python'],.dsh-wel-editor-host[data-highlight-preset='vscode-json'],.dsh-wel-editor-host[data-highlight-preset='vscode-typescript'],.dsh-wel-editor-host[data-highlight-preset='vscode-javascript'],.dsh-wel-editor-host[data-highlight-preset='vscode-css'],.dsh-wel-editor-host[data-highlight-preset='vscode-markdown'],.dsh-wel-editor-host[data-highlight-preset='vscode-shell'],.dsh-wel-editor-host[data-highlight-preset='vscode-config'],.dsh-wel-editor-host[data-highlight-preset='vscode-cpp'],.dsh-wel-editor-host[data-highlight-preset='vscode-csharp']{--shiki-token-constant:#098658;--shiki-token-string:#a31515;--shiki-token-comment:#008000;--shiki-token-keyword:#0000ff;--shiki-token-parameter:#001080;--shiki-token-function:#795e26;--shiki-token-string-expression:#795e26;--shiki-token-punctuation:#000000;--shiki-token-link:#0000ff}
+body[data-ds-dark-theme] .dsh-wel-editor-host[data-highlight-preset='vscode-python'],body[data-ds-dark-theme] .dsh-wel-editor-host[data-highlight-preset='vscode-json'],body[data-ds-dark-theme] .dsh-wel-editor-host[data-highlight-preset='vscode-typescript'],body[data-ds-dark-theme] .dsh-wel-editor-host[data-highlight-preset='vscode-javascript'],body[data-ds-dark-theme] .dsh-wel-editor-host[data-highlight-preset='vscode-css'],body[data-ds-dark-theme] .dsh-wel-editor-host[data-highlight-preset='vscode-markdown'],body[data-ds-dark-theme] .dsh-wel-editor-host[data-highlight-preset='vscode-shell'],body[data-ds-dark-theme] .dsh-wel-editor-host[data-highlight-preset='vscode-config'],body[data-ds-dark-theme] .dsh-wel-editor-host[data-highlight-preset='vscode-cpp'],body[data-ds-dark-theme] .dsh-wel-editor-host[data-highlight-preset='vscode-csharp']{--shiki-token-constant:#b5cea8;--shiki-token-string:#ce9178;--shiki-token-comment:#6a9955;--shiki-token-keyword:#569cd6;--shiki-token-parameter:#9cdcfe;--shiki-token-function:#dcdcaa;--shiki-token-string-expression:#dcdcaa;--shiki-token-punctuation:#d4d4d4;--shiki-token-link:#569cd6}
+.dsh-wel-editor-host[data-highlight-preset='vs2022']{--shiki-token-constant:#098658;--shiki-token-string:#a31515;--shiki-token-comment:#008000;--shiki-token-keyword:#0000ff;--shiki-token-parameter:#000000;--shiki-token-function:#2b91af;--shiki-token-string-expression:#a31515;--shiki-token-punctuation:#000000;--shiki-token-link:#0000ff}
+body[data-ds-dark-theme] .dsh-wel-editor-host[data-highlight-preset='vs2022']{--shiki-token-constant:#b5cea8;--shiki-token-string:#d69d85;--shiki-token-comment:#57a64a;--shiki-token-keyword:#569cd6;--shiki-token-parameter:#dcdcdc;--shiki-token-function:#4ec9b0;--shiki-token-string-expression:#d69d85;--shiki-token-punctuation:#b4b4b4;--shiki-token-link:#569cd6}
+/* Preprocessor directive color (C# #if/#region, ...): purple on both themes,
+   lighter in dark for contrast; overridable per preset. */
+.dsh-wel-editor-host{--dsh-wel-token-directive:#8e44ad}
+body[data-ds-dark-theme] .dsh-wel-editor-host{--dsh-wel-token-directive:#c586c0}
+/* Sidebar top actions: the harness New Session button (the root div's only
+   direct button) is hidden and the plugin draws its own two-button row —
+   New Session / workspace files — in the same flow position. */
+.dsh-wel-frame [data-slot="sidebar"] > div > button{display:none}
+.dsh-wel-sidebar-top-actions{flex:none;min-width:0;display:flex;align-items:stretch;gap:6px;height:38px;margin:0 2px 8px;box-sizing:border-box}
+.dsh-wel-sidebar-top-action{flex:1;min-width:0;display:inline-flex;align-items:center;justify-content:center;gap:6px;height:38px;padding:0 10px;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-button-elevated-fill);color:var(--dsw-alias-label-primary);font:inherit;font-size:14px;font-weight:500;line-height:22px;cursor:pointer;overflow:hidden;white-space:nowrap}
+.dsh-wel-sidebar-top-action:hover{background:var(--dsw-alias-button-floating-hover)}
+.dsh-wel-sidebar-top-action[data-active]{background:var(--dsw-alias-interactive-bg-active);color:var(--dsw-alias-brand-primary)}
+.dsh-wel-sidebar-top-action:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-2px}
+.dsh-wel-sidebar-top-icon{flex:none;width:14px;height:14px}
+.dsh-wel-sidebar-top-icon svg{display:block;width:100%;height:100%}
+.dsh-wel-sidebar-top-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Collapsed rail: the two controls become icon-only 36px buttons, stacked. */
+.dsh-wel-sidebar-top-actions[data-rail]{flex-direction:column;align-items:flex-start;gap:0;height:auto;margin:0 0 12px;position:relative;z-index:10}
+.dsh-wel-sidebar-top-actions[data-rail] .dsh-wel-sidebar-top-action{flex:none;width:36px;height:36px;padding:0;gap:0;border-color:transparent;background:transparent}
+.dsh-wel-sidebar-top-actions[data-rail] .dsh-wel-sidebar-top-action:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dsh-wel-sidebar-top-actions[data-rail] .dsh-wel-sidebar-top-icon{width:18px;height:18px}
+.dsh-wel-sidebar-top-actions[data-rail] .dsh-wel-sidebar-top-label{display:none}
+/* Collapsed rail: hide the harness workspace browser's rail controls (search
+   + add workspace) — the plugin's two nav tabs are the only region icons. */
+.dsh-wel-frame[data-sidebar-collapsed] [data-slot="sidebar.workspaces"] > *{display:none}
+/* Sidebar files region: the harness workspace browser is hidden while the
+   plugin's file tree fills the region seat (fused into the sidebar). */
+.dsh-wel-sidebar-files{display:none}
+.dsh-wel-frame[data-sidebar-files] [data-slot="sidebar.workspaces"] > :not(.dsh-wel-sidebar-files){display:none}
+/* The sidebar shell hides nested scrollbars until the pointer is over the
+   column (quietBars); the file list is scroll-heavy, so its scrollbar stays
+   visible. The files panel is inset 12px on both sides (the harness region
+   otherwise extends flush to the right edge) so it reads as a symmetric card. */
+.dsh-wel-frame[data-sidebar-files] .dsh-wel-sidebar-files{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;margin-right:12px;--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2);--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2)}
+.dsh-wel-frame[data-sidebar-files] .dsh-wel-sidebar-files .dsh-wel-tree{flex:1;min-height:0;height:auto;border-right:0}
 `
 
 const tokenHighlight = HighlightStyle.define([
@@ -97,10 +205,24 @@ const tokenHighlight = HighlightStyle.define([
   { tag: [tags.string, tags.special(tags.string), tags.regexp], color: 'var(--shiki-token-string)' },
   { tag: [tags.number, tags.bool, tags.null], color: 'var(--shiki-token-constant)' },
   { tag: [tags.function(tags.variableName), tags.function(tags.propertyName), tags.typeName, tags.className, tags.namespace], color: 'var(--shiki-token-function)' },
+  // Name-definition tokens (class/namespace/type names in declaration
+  // position) ride the type color; StreamLanguage emits these as
+  // `variableName.definition`, which the bare variableName rule above does not
+  // catch — without this they would fall through to the fallback highlighter.
+  { tag: [tags.definition(tags.variableName), tags.definition(tags.typeName), tags.definition(tags.propertyName)], color: 'var(--shiki-token-function)' },
   { tag: [tags.variableName, tags.propertyName, tags.attributeName], color: 'var(--shiki-token-parameter)' },
   { tag: [tags.heading, tags.link, tags.url], color: 'var(--shiki-token-link)' },
+  // Preprocessor directives: purple via the directive variable, with a purple
+  // fallback so a directive never silently renders as a string when the
+  // variable is unavailable.
+  { tag: tags.meta, color: 'var(--dsh-wel-token-directive, #8e44ad)' },
   { tag: [tags.inserted, tags.meta], color: 'var(--shiki-token-string-expression)' },
   { tag: tags.punctuation, color: 'var(--shiki-token-punctuation)' },
+  // Markup (XML/HTML) tokens. angleBracket was unstyled and character already
+  // rides the string color; the fallbacks preserve that unless a markup preset
+  // (e.g. the VS Code XML preset) sets the override variables.
+  { tag: tags.angleBracket, color: 'var(--dsh-wel-token-xml-punctuation, inherit)' },
+  { tag: tags.character, color: 'var(--dsh-wel-token-xml-entity, var(--shiki-token-string))' },
   { tag: [tags.invalid, tags.deleted], color: 'var(--dsw-alias-state-error-primary)' },
 ])
 
@@ -135,6 +257,54 @@ const SCSS_LANGUAGE = language('scss', CSS_LANGUAGE.extension)
 const LESS_LANGUAGE = language('less', CSS_LANGUAGE.extension)
 const MDX_LANGUAGE = language('mdx', MARKDOWN_LANGUAGE.extension)
 const INI_LANGUAGE = language('ini', [])
+/* C# legacy mode: replicates the clike `csharp` export (keywords, types, and
+   the @"..." verbatim-string hook) and adds the C/C++-style preprocessor hook
+   so #if/#define/#region lines render as directives instead of plain
+   identifiers (the shipped csharp export has no '#' hook). */
+const csharpWords = (str) => {
+  const obj = {}
+  for (const word of str.split(' ')) obj[word] = true
+  return obj
+}
+const csharpDirectiveHook = (stream, state) => {
+  if (!state.startOfLine) return false
+  let next = null
+  for (let ch; (ch = stream.peek());) {
+    if (ch === '\\' && stream.match(/^.$/)) { next = csharpDirectiveHook; break }
+    if (ch === '/' && stream.match(/^\/[\/\*]/, false)) break
+    stream.next()
+  }
+  state.tokenize = next
+  return 'meta'
+}
+const csharpVerbatimString = (stream, state) => {
+  let next
+  while ((next = stream.next()) != null) {
+    if (next === '"' && !stream.eat('"')) { state.tokenize = null; break }
+  }
+  return 'string'
+}
+const CSHARP_MODE = clike({
+  name: 'csharp',
+  keywords: csharpWords('abstract as async await base break case catch checked class const continue default delegate do else enum event explicit extern finally fixed for foreach goto if implicit in init interface internal is lock namespace new operator out override params private protected public readonly record ref required return sealed sizeof stackalloc static struct switch this throw try typeof unchecked unsafe using virtual void volatile while add alias ascending descending dynamic from get global group into join let orderby partial remove select set value var yield'),
+  types: csharpWords('Action Boolean Byte Char DateTime DateTimeOffset Decimal Double Func Guid Int16 Int32 Int64 Object SByte Single String Task TimeSpan UInt16 UInt32 UInt64 bool byte char decimal double short int long object sbyte float string ushort uint ulong'),
+  blockKeywords: csharpWords('catch class do else finally for foreach if struct switch try while'),
+  defKeywords: csharpWords('class interface namespace record struct var'),
+  typeFirstDefinitions: true,
+  atoms: csharpWords('true false null'),
+  hooks: {
+    '@': (stream, state) => {
+      if (stream.eat('"')) {
+        state.tokenize = csharpVerbatimString
+        return csharpVerbatimString(stream, state)
+      }
+      stream.eatWhile(/[\w$_]/)
+      return 'meta'
+    },
+    '#': csharpDirectiveHook,
+  },
+})
+const CS_LANGUAGE = language('cs', StreamLanguage.define(CSHARP_MODE))
 
 const EXACT_LANGUAGES = Object.freeze({
   dockerfile: DOCKER_LANGUAGE,
@@ -158,6 +328,7 @@ const EXTENSION_LANGUAGES = Object.freeze({
   yaml: YAML_LANGUAGE, yml: YAML_LANGUAGE,
   c: C_LANGUAGE, h: C_LANGUAGE, cc: CPP_LANGUAGE, cpp: CPP_LANGUAGE, cxx: CPP_LANGUAGE, hpp: CPP_LANGUAGE,
   java: JAVA_LANGUAGE, rs: RUST_LANGUAGE, php: PHP_LANGUAGE, go: GO_LANGUAGE,
+  cs: CS_LANGUAGE, csx: CS_LANGUAGE,
   sh: SHELL_LANGUAGE, bash: SHELL_LANGUAGE, zsh: SHELL_LANGUAGE,
   ps1: POWERSHELL_LANGUAGE, psm1: POWERSHELL_LANGUAGE,
   rb: RUBY_LANGUAGE, toml: TOML_LANGUAGE, ini: INI_LANGUAGE, cfg: INI_LANGUAGE,
@@ -188,6 +359,7 @@ const FILE_COLOR_GROUPS = Object.freeze([
   { group: 'shell', label: 'Shell', color: '#22a06b' },
   { group: 'config', label: '配置文件', color: '#8a95a5' },
   { group: 'c-family', label: 'C/C++', color: '#5a7ba6' },
+  { group: 'csharp', label: 'C#', color: '#a25fd0' },
   { group: 'other', label: '其他', color: '#9aa3ad' },
   { group: 'blocked', label: '受阻', color: '#e5484d' },
 ])
@@ -217,6 +389,7 @@ const FILE_GROUP_BY_EXTENSION = Object.freeze({
   sh: 'shell', bash: 'shell', zsh: 'shell', ps1: 'shell', psm1: 'shell',
   yaml: 'config', yml: 'config', toml: 'config', ini: 'config', cfg: 'config', conf: 'config', env: 'config',
   c: 'c-family', h: 'c-family', cc: 'c-family', cpp: 'c-family', cxx: 'c-family', hpp: 'c-family',
+  cs: 'csharp', csx: 'csharp',
 })
 /* Dot-less or conventionally-uppercase names that extension splitting would miss. */
 const FILE_GROUP_BY_EXACT_NAME = Object.freeze({
@@ -235,6 +408,55 @@ function colorGroupOf(entry) {
   if (exact !== undefined) return exact
   const extension = lower.includes('.') ? lower.slice(lower.lastIndexOf('.') + 1) : ''
   return FILE_GROUP_BY_EXTENSION[extension] ?? DEFAULT_FILE_GROUP
+}
+
+/* Editor syntax-highlight presets. Each non-default preset overrides the
+   --shiki-token-* variables on the editor host (light and dark variants via
+   the body attribute), so the CodeMirror HighlightStyle keeps its single
+   var() mapping and every palette stays theme-consistent. 'default' leaves
+   the app theme's own shiki palette untouched. */
+const HIGHLIGHT_PRESETS = Object.freeze([
+  { id: 'default', label: '默认' },
+  { id: 'classic', label: '经典' },
+  { id: 'warm', label: '暖色' },
+  { id: 'cool', label: '冷色' },
+  { id: 'mono', label: '单色' },
+  { id: 'vscode-xml', label: 'XML（VS Code）' },
+  { id: 'vscode-python', label: 'Python（VS Code）' },
+  { id: 'vscode-json', label: 'JSON（VS Code）' },
+  { id: 'vscode-typescript', label: 'TypeScript（VS Code）' },
+  { id: 'vscode-javascript', label: 'JavaScript（VS Code）' },
+  { id: 'vscode-css', label: 'CSS（VS Code）' },
+  { id: 'vscode-markdown', label: 'Markdown（VS Code）' },
+  { id: 'vscode-shell', label: 'Shell（VS Code）' },
+  { id: 'vscode-config', label: '配置（VS Code）' },
+  { id: 'vscode-cpp', label: 'C/C++（VS Code）' },
+  { id: 'vscode-csharp', label: 'C#（VS Code）' },
+  { id: 'vs2022', label: 'Visual Studio 2022' },
+])
+const HIGHLIGHT_PRESET_DEFAULT = 'default'
+/* Per-group default highlight presets. A group with no entry here and no user
+   pick follows the app theme's shiki palette ('default'). */
+const HIGHLIGHT_PRESET_DEFAULT_BY_GROUP = Object.freeze({
+  markup: 'vscode-xml',
+  python: 'vscode-python',
+  json: 'vscode-json',
+  typescript: 'vscode-typescript',
+  javascript: 'vscode-javascript',
+  style: 'vscode-css',
+  markdown: 'vscode-markdown',
+  shell: 'vscode-shell',
+  config: 'vscode-config',
+  'c-family': 'vscode-cpp',
+  csharp: 'vs2022',
+})
+/** The preset a group falls back to when the user has not picked one. */
+function highlightPresetDefaultFor(group) {
+  return HIGHLIGHT_PRESET_DEFAULT_BY_GROUP[group] ?? HIGHLIGHT_PRESET_DEFAULT
+}
+/** The preset one file-type group resolves to: the user's pick, else the group's default. */
+function highlightPresetOf(settings, group) {
+  return settings?.highlightPresets?.[group] ?? highlightPresetDefaultFor(group)
 }
 
 function lineSeparator(value) {
@@ -271,26 +493,66 @@ function readOnlyReason(preview) {
 const fileLabel = name => languageFor(name).label
 const clamp = (value, min, max) => Math.min(max, Math.max(min, Math.round(value)))
 function formatBytes(bytes) { if (!Number.isFinite(bytes) || bytes < 0) return ''; if (bytes < 1024) return `${bytes} B`; if (bytes < 1048576) return `${(bytes / 1024).toFixed(bytes < 10240 ? 1 : 0)} KB`; return `${(bytes / 1048576).toFixed(1)} MB` }
+// The persisted sidebar width lives with the explorer pane geometry
+// (EXPLORER_LAYOUT_STORE_KEY): the live value rides the root layout store,
+// which cannot persist its whole value (it also carries large file drafts), so
+// the explorer pane store mirrors it on change and this rehydrates it on load.
+// 0 means the sidebar is collapsed; missing or invalid persisted data falls
+// back to the default width (render-time clamping still applies the viewport
+// ceiling).
+function readPersistedSidebarWidth() {
+  if (typeof localStorage === 'undefined') return SIDEBAR_DEFAULT
+  try {
+    const raw = localStorage.getItem(EXPLORER_LAYOUT_STORE_KEY)
+    if (raw === null) return SIDEBAR_DEFAULT
+    const sidebar = JSON.parse(raw)?.sidebar
+    if (sidebar === 0) return 0
+    if (typeof sidebar === 'number' && Number.isFinite(sidebar)) return Math.max(SIDEBAR_MIN, Math.round(sidebar))
+    return SIDEBAR_DEFAULT
+  } catch {
+    return SIDEBAR_DEFAULT
+  }
+}
 function createLayoutStore() {
   return defineStore({
     init: () => ({
-      sidebar: SIDEBAR_DEFAULT,
-      tree: TREE_DEFAULT,
-      preview: PREVIEW_DEFAULT,
-      explorerOpen: true,
+      sidebar: readPersistedSidebarWidth(),
       detailsOpen: false,
       drafts: {},
+      // Sidebar browsing region: 'sessions' shows the harness workspace/session
+      // browser; 'files' swaps the same region for the workspace file tree.
+      view: 'sessions',
     }),
     actions: {
       setSidebar: (draft, width, max = SIDEBAR_MAX_FALLBACK) => { draft.sidebar = clamp(width, SIDEBAR_MIN, max) },
-      setTree: (draft, width, max = TREE_MAX) => { draft.tree = clamp(width, TREE_MIN, max) },
-      setPreview: (draft, width, max = PREVIEW_MAX) => { draft.preview = clamp(width, PREVIEW_MIN, max) },
       toggleSidebar: (draft) => { draft.sidebar = draft.sidebar === 0 ? SIDEBAR_DEFAULT : 0 },
-      toggleExplorer: (draft) => { draft.explorerOpen = !draft.explorerOpen },
       openDetails: (draft) => { draft.detailsOpen = true },
       closeDetails: (draft) => { draft.detailsOpen = false },
       rememberDraft: (draft, workspaceId, value) => { draft.drafts[String(workspaceId)] = value },
       clearDraft: (draft, workspaceId) => { delete draft.drafts[String(workspaceId)] },
+      setView: (draft, view) => { draft.view = view === 'files' ? 'files' : 'sessions' },
+    },
+  })
+}
+/* Explorer pane geometry shared by every session: the workspace file-tree
+   width, the file-preview width, the sidebar width (0 = collapsed), and the
+   explorer open state (which controls the on-screen presence of both panes).
+   Persisted globally in localStorage so session switches and page reloads keep
+   one shared set of parameters. */
+function createExplorerPaneStore() {
+  return defineStore({
+    init: () => ({
+      tree: TREE_DEFAULT,
+      preview: PREVIEW_DEFAULT,
+      sidebar: SIDEBAR_DEFAULT,
+      explorerOpen: true,
+    }),
+    persist: EXPLORER_LAYOUT_STORE_KEY,
+    actions: {
+      setTree: (draft, width, max = TREE_MAX) => { draft.tree = clamp(width, TREE_MIN, max) },
+      setPreview: (draft, width, max = PREVIEW_MAX) => { draft.preview = clamp(width, PREVIEW_MIN, max) },
+      setSidebar: (draft, width) => { draft.sidebar = width === 0 ? 0 : Math.max(SIDEBAR_MIN, Math.round(width)) },
+      toggleExplorer: (draft) => { draft.explorerOpen = !draft.explorerOpen },
     },
   })
 }
@@ -303,8 +565,13 @@ function createPreviewSessionStore() {
     actions: {
       rememberPreviewSession: (draft, key, value) => {
         const normalized = normalizePreviewSession(value)
-        if (normalized.tabs.length === 0) delete draft.previewSessions[String(key)]
-        else draft.previewSessions[String(key)] = normalized
+        if (normalized.tabs.length === 0 && (normalized.expanded ?? []).length === 0) delete draft.previewSessions[String(key)]
+        else {
+          // Timestamp every write so stale sessions can be pruned below; the
+          // in-memory editor keeps full content, only the stored copy is slim.
+          draft.previewSessions[String(key)] = { ...normalized, updatedAt: Date.now() }
+          prunePreviewSessions(draft)
+        }
       },
     },
   })
@@ -314,12 +581,15 @@ function createExplorerSettingsStore() {
     init: () => ({
       rowHeight: ROW_HEIGHT_DEFAULT,
       chatFontSize: CHAT_FONT_SIZE_DEFAULT,
+      wrap: false,
       fileColors: {},
+      highlightPresets: {},
     }),
     persist: EXPLORER_SETTINGS_STORE_KEY,
     actions: {
       setRowHeight: (draft, value) => { draft.rowHeight = clamp(value, ROW_HEIGHT_MIN, ROW_HEIGHT_MAX) },
       setChatFontSize: (draft, value) => { draft.chatFontSize = clamp(value, CHAT_FONT_SIZE_MIN, CHAT_FONT_SIZE_MAX) },
+      setWrap: (draft, value) => { draft.wrap = Boolean(value) },
       setFileColor: (draft, group, value) => {
         if (draft.fileColors === undefined) draft.fileColors = {}
         if (String(value).toLowerCase() === fileColorDefault(group).toLowerCase()) delete draft.fileColors[group]
@@ -327,6 +597,13 @@ function createExplorerSettingsStore() {
       },
       resetFileColor: (draft, group) => { if (draft.fileColors !== undefined) delete draft.fileColors[group] },
       resetFileColors: (draft) => { draft.fileColors = {} },
+      setHighlightPreset: (draft, group, presetId) => {
+        if (draft.highlightPresets === undefined) draft.highlightPresets = {}
+        if (presetId === highlightPresetDefaultFor(group)) delete draft.highlightPresets[group]
+        else draft.highlightPresets[group] = String(presetId)
+      },
+      resetHighlightPreset: (draft, group) => { if (draft.highlightPresets !== undefined) delete draft.highlightPresets[group] },
+      resetHighlightPresets: (draft) => { draft.highlightPresets = {} },
     },
   })
 }
@@ -841,8 +1118,8 @@ class PromptContextBridge {
     patch?.input.notify('error', message)
   }
 }
-async function requestJson(endpoint, workspaceId, path, signal) { const query=new URLSearchParams({workspaceId,path});const response=await fetch(`${API_PREFIX}/${endpoint}?${query}`,{method:'GET',headers:{accept:'application/json'},credentials:'same-origin',signal});let payload;try{payload=await response.json()}catch(error){if(error?.name==='AbortError')throw error;throw new WorkspaceApiError('invalid-response',`工作区接口返回了无效响应（HTTP ${response.status}）`,response.status)}if(!response.ok){const failure=payload?.error;throw new WorkspaceApiError(typeof failure?.code==='string'?failure.code:'request-failed',typeof failure?.message==='string'?failure.message:`读取工作区失败（HTTP ${response.status}）`,response.status)}return payload }
-async function putFile(workspaceId,path,content,revision,signal){const query=new URLSearchParams({workspaceId:String(workspaceId),path});const headers={'content-type':'text/plain; charset=utf-8',accept:'application/json'};if(revision!==undefined&&revision!==null)headers['if-match']=String(revision);const response=await fetch(`${API_PREFIX}/file?${query}`,{method:'PUT',headers,credentials:'same-origin',body:content,signal});let payload;try{payload=await response.json()}catch(error){if(error?.name==='AbortError')throw error;throw new WorkspaceApiError('invalid-response',`保存接口返回了无效响应（HTTP ${response.status}）`,response.status)}if(!response.ok){const failure=payload?.error;throw new WorkspaceApiError(typeof failure?.code==='string'?failure.code:'save-failed',typeof failure?.message==='string'?failure.message:`保存文件失败（HTTP ${response.status}）`,response.status)}return payload}
+async function requestJson(endpoint, workspaceId, path, signal, encoding) { const query=new URLSearchParams({workspaceId,path});if(encoding!==undefined&&encoding!==null)query.set('encoding',String(encoding));const response=await fetch(`${API_PREFIX}/${endpoint}?${query}`,{method:'GET',headers:{accept:'application/json'},credentials:'same-origin',signal});let payload;try{payload=await response.json()}catch(error){if(error?.name==='AbortError')throw error;throw new WorkspaceApiError('invalid-response',`工作区接口返回了无效响应（HTTP ${response.status}）`,response.status)}if(!response.ok){const failure=payload?.error;throw new WorkspaceApiError(typeof failure?.code==='string'?failure.code:'request-failed',typeof failure?.message==='string'?failure.message:`读取工作区失败（HTTP ${response.status}）`,response.status)}return payload }
+async function putFile(workspaceId,path,content,revision,signal,encoding){const query=new URLSearchParams({workspaceId:String(workspaceId),path});if(encoding!==undefined&&encoding!==null)query.set('encoding',String(encoding));const headers={'content-type':'text/plain; charset=utf-8',accept:'application/json'};if(revision!==undefined&&revision!==null)headers['if-match']=String(revision);const response=await fetch(`${API_PREFIX}/file?${query}`,{method:'PUT',headers,credentials:'same-origin',body:content,signal});let payload;try{payload=await response.json()}catch(error){if(error?.name==='AbortError')throw error;throw new WorkspaceApiError('invalid-response',`保存接口返回了无效响应（HTTP ${response.status}）`,response.status)}if(!response.ok){const failure=payload?.error;throw new WorkspaceApiError(typeof failure?.code==='string'?failure.code:'save-failed',typeof failure?.message==='string'?failure.message:`保存文件失败（HTTP ${response.status}）`,response.status)}return payload}
 async function renderContext(sessionId,context,signal){const response=await fetch(`${API_PREFIX}/context`,{method:'POST',headers:{accept:'application/json','content-type':'application/json'},credentials:'same-origin',body:JSON.stringify({...context,sessionId:String(sessionId)}),signal});let payload;try{payload=await response.json()}catch(error){if(error?.name==='AbortError')throw error;throw new WorkspaceApiError('invalid-response',`编辑器上下文接口返回了无效响应（HTTP ${response.status}）`,response.status)}if(!response.ok){const failure=payload?.error;throw new WorkspaceApiError(typeof failure?.code==='string'?failure.code:'context-failed',typeof failure?.message==='string'?failure.message:`无法提交编辑器上下文（HTTP ${response.status}）`,response.status)}if(typeof payload?.text!=='string')throw new WorkspaceApiError('invalid-response','编辑器上下文接口缺少文本结果',response.status);return payload.text}
 async function mutateEntry(method,workspaceId,path,payload,signal){const query=new URLSearchParams({workspaceId:String(workspaceId),path});const response=await fetch(`${API_PREFIX}/entry?${query}`,{method,headers:{accept:'application/json','content-type':'application/json'},credentials:'same-origin',body:JSON.stringify(payload),signal});let result;try{result=await response.json()}catch(error){if(error?.name==='AbortError')throw error;throw new WorkspaceApiError('invalid-response',`工作区修改接口返回了无效响应（HTTP ${response.status}）`,response.status)}if(!response.ok){const failure=result?.error;throw new WorkspaceApiError(typeof failure?.code==='string'?failure.code:'entry-failed',typeof failure?.message==='string'?failure.message:`工作区修改失败（HTTP ${response.status}）`,response.status)}return result}
 async function requestSearch(workspaceId,query,caseSensitive,signal){const params=new URLSearchParams({workspaceId:String(workspaceId),q:query,caseSensitive:caseSensitive?'true':'false'});const response=await fetch(`${API_PREFIX}/search?${params}`,{method:'GET',headers:{accept:'application/json'},credentials:'same-origin',signal});let payload;try{payload=await response.json()}catch(error){if(error?.name==='AbortError')throw error;throw new WorkspaceApiError('invalid-response',`搜索接口返回了无效响应（HTTP ${response.status}）`,response.status)}if(!response.ok){const failure=payload?.error;throw new WorkspaceApiError(typeof failure?.code==='string'?failure.code:'search-failed',typeof failure?.message==='string'?failure.message:`搜索失败（HTTP ${response.status}）`,response.status)}return payload}
@@ -869,6 +1146,7 @@ function clonePreviewTab(tab) {
     dirty: Boolean(tab.dirty),
     draft: typeof tab.draft === 'string' ? tab.draft : '',
     editing: Boolean(tab.editing),
+    encoding: typeof tab.encoding === 'string' && tab.encoding !== '' ? tab.encoding : 'utf-8',
     lineEnding: typeof tab.lineEnding === 'string' ? tab.lineEnding : 'none',
     name: typeof tab.name === 'string' && tab.name !== '' ? tab.name : tab.path.slice(tab.path.lastIndexOf('/') + 1),
     path: tab.path,
@@ -882,6 +1160,29 @@ function clonePreviewTab(tab) {
       : { error: Boolean(tab.status.error), text: String(tab.status.text ?? '') },
     symlink: Boolean(tab.symlink),
   }
+}
+/* Persisted copy of a tab: identical to the live clone except clean tabs
+ * carry no file text. Persisting every tab's full draft ballooned the store
+ * into the localStorage quota, making setItem throw and silently disabling
+ * persistence (stale tabs on reload). Clean content equals disk and is
+ * re-read on restore; only dirty tabs need their draft to survive. */
+function serializePreviewTab(tab) {
+  const clone = clonePreviewTab(tab)
+  if (clone === null) return null
+  if (!clone.dirty) {
+    clone.baseText = ''
+    clone.draft = ''
+  }
+  return clone
+}
+/* Cap the stored session count so the value stays bounded forever. The key
+ * being written is freshest and always survives; others keep the most
+ * recently updated PREVIEW_SESSION_MAX entries. */
+function prunePreviewSessions(draft) {
+  const entries = Object.entries(draft.previewSessions ?? {})
+  if (entries.length <= PREVIEW_SESSION_MAX) return
+  entries.sort((a, b) => (b[1]?.updatedAt ?? -Infinity) - (a[1]?.updatedAt ?? -Infinity))
+  for (const [key] of entries.slice(PREVIEW_SESSION_MAX)) delete draft.previewSessions[key]
 }
 /* Stable partition keeping every pinned tab ahead of all unpinned ones. */
 function orderPinnedFirst(tabs) {
@@ -902,7 +1203,10 @@ function normalizePreviewSession(value) {
   const activePath = typeof value?.activePath === 'string' && tabs.some(tab => tab.path === value.activePath)
     ? value.activePath
     : (tabs[0]?.path ?? null)
-  return { activePath, tabs }
+  const expanded = Array.isArray(value?.expanded)
+    ? [...new Set(value.expanded.filter(path => typeof path === 'string' && path !== ''))]
+    : []
+  return { activePath, tabs, expanded }
 }
 function previewSessionWithDraft(value, storedDraft) {
   const session = normalizePreviewSession(value)
@@ -914,6 +1218,7 @@ function previewSessionWithDraft(value, storedDraft) {
       dirty: true,
       draft: typeof storedDraft.content === 'string' ? storedDraft.content : '',
       editing: true,
+      encoding: typeof storedDraft.encoding === 'string' && storedDraft.encoding !== '' ? storedDraft.encoding : 'utf-8',
       lineEnding: typeof storedDraft.lineEnding === 'string' ? storedDraft.lineEnding : 'none',
       name: typeof storedDraft.name === 'string' && storedDraft.name !== ''
         ? storedDraft.name
@@ -960,17 +1265,23 @@ function selectStoredPreviewSession(previewSessions, workspace, currentSession, 
   }
   return { key: undefined, value: undefined }
 }
-function serializePreviewSession(activePath, tabs) {
+function serializePreviewSession(activePath, tabs, expanded) {
   const seen = new Set()
   const normalized = []
   for (const tab of tabs) {
     if (tab === undefined || tab === null || seen.has(tab.path)) continue
     seen.add(tab.path)
-    normalized.push(clonePreviewTab(tab))
+    normalized.push(serializePreviewTab(tab))
   }
+  // Root ('') is always expanded by default and never stored; only real
+  // folders participate in the persisted set.
+  const expandedList = expanded === undefined || expanded === null
+    ? []
+    : [...expanded].filter(path => typeof path === 'string' && path !== '').sort()
   return {
     activePath: activePath !== null && normalized.some(tab => tab.path === activePath) ? activePath : (normalized[0]?.path ?? null),
     tabs: normalized,
+    expanded: expandedList,
   }
 }
 function dropIndexFromEvent(event) {
@@ -1010,6 +1321,38 @@ function IconNewFile(){return h('svg',{'aria-hidden':true,fill:'none',viewBox:'0
 function IconNewFolder(){return h('svg',{'aria-hidden':true,fill:'none',viewBox:'0 0 16 16'},h('path',{d:'M1.8 4.3h4l1.2 1.4h7.2v6.8a1.2 1.2 0 0 1-1.2 1.2H3a1.2 1.2 0 0 1-1.2-1.2z',stroke:'currentColor',strokeLinejoin:'round',strokeWidth:1.3}),h('path',{d:'M8 7.5v3.8M6.1 9.4h3.8',stroke:'currentColor',strokeLinecap:'round',strokeWidth:1.3}))}
 function IconSearch(){return h('svg',{'aria-hidden':true,fill:'none',viewBox:'0 0 16 16'},h('circle',{cx:6.9,cy:6.9,r:4.4,stroke:'currentColor',strokeWidth:1.3}),h('path',{d:'M10.3 10.3 14 14',stroke:'currentColor',strokeLinecap:'round',strokeWidth:1.3}))}
 function IconPin(){return h('svg',{'aria-hidden':true,fill:'none',stroke:'currentColor',strokeLinecap:'round',strokeLinejoin:'round',strokeWidth:1.8,viewBox:'5 2 14 19'},h('line',{x1:12,x2:12,y1:17,y2:21}),h('path',{d:'M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z'}))}
+function IconFolder(){return h('svg',{'aria-hidden':true,fill:'none',viewBox:'0 0 16 16'},h('path',{d:'M1.8 4.3h4l1.2 1.4h7.2v6.8a1.2 1.2 0 0 1-1.2 1.2H3a1.2 1.2 0 0 1-1.2-1.2z',stroke:'currentColor',strokeLinejoin:'round',strokeWidth:1.3}))}
+function IconSessionList(){return h('svg',{'aria-hidden':true,fill:'none',viewBox:'0 0 16 16'},h('path',{d:'M2.5 3.2h11M2.5 8h11M2.5 12.8h7',stroke:'currentColor',strokeLinecap:'round',strokeWidth:1.3}))}
+/* The sidebar's two-button segment replacing the harness New Session button:
+   two exclusive navigation tabs — Session List / Workspace Files — that only
+   switch the browsing region (no session creation, no toggle-off on repeat).
+   Each button is flex:1 (50%) so the pair tracks the sidebar width while it
+   is dragged; the collapsed rail stacks icon-only controls. */
+function SidebarTopActions({ collapsed, view, width, onSelectSessions, onSelectFiles }) {
+  // The row is hosted inside the harness sidebar shell, which does not stretch
+  // foreign nodes reliably, so its width is bound to the sidebar width
+  // explicitly (root padding 12px x2 plus the row's 2px x2 margins) instead of
+  // relying on the parent flex stretch; AppFrame re-renders on every drag tick.
+  const rowStyle = collapsed ? undefined : { width: `${Math.max(0, width - 28)}px` }
+  return h('div', { className: 'dsh-wel-sidebar-top-actions', 'data-rail': collapsed || undefined, style: rowStyle },
+    h('button', {
+      'aria-label': '会话列表',
+      className: 'dsh-wel-sidebar-top-action',
+      'data-active': view !== 'files' || undefined,
+      onClick: onSelectSessions,
+      title: '会话列表',
+      type: 'button',
+    }, h('span', { 'aria-hidden': true, className: 'dsh-wel-sidebar-top-icon' }, h(IconSessionList)), h('span', { className: 'dsh-wel-sidebar-top-label' }, '会话列表')),
+    h('button', {
+      'aria-label': '文件浏览',
+      className: 'dsh-wel-sidebar-top-action',
+      'data-active': view === 'files' || undefined,
+      onClick: onSelectFiles,
+      title: '文件浏览',
+      type: 'button',
+    }, h('span', { 'aria-hidden': true, className: 'dsh-wel-sidebar-top-icon' }, h(IconFolder)), h('span', { className: 'dsh-wel-sidebar-top-label' }, '文件浏览')),
+  )
+}
 
 function ResizeHandle({label,left,value,min,max,onResize,onDragging}){const[dragging,setDragging]=useState(false),origin=useRef(0),base=useRef(0);const start=useCallback(e=>{e.preventDefault();e.currentTarget.setPointerCapture(e.pointerId);origin.current=e.clientX;base.current=value;setDragging(true);onDragging(true)},[onDragging,value]);const move=useCallback(e=>{if(e.currentTarget.hasPointerCapture(e.pointerId))onResize(clamp(base.current+e.clientX-origin.current,min,max))},[max,min,onResize]);const end=useCallback(e=>{if(!e.currentTarget.hasPointerCapture(e.pointerId))return;e.currentTarget.releasePointerCapture(e.pointerId);onResize(clamp(base.current+e.clientX-origin.current,min,max));setDragging(false);onDragging(false)},[max,min,onDragging,onResize]);return h('div',{'aria-label':label,'aria-orientation':'vertical','aria-valuemax':max,'aria-valuemin':min,'aria-valuenow':value,className:'dsh-wel-splitter','data-dragging':dragging||undefined,onKeyDown:e=>{if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();onResize(clamp(value+(e.key==='ArrowLeft'?-RESIZE_STEP:RESIZE_STEP),min,max))}},onLostPointerCapture:()=>{setDragging(false);onDragging(false)},onPointerCancel:end,onPointerDown:start,onPointerMove:move,onPointerUp:end,role:'separator',style:{left},tabIndex:0})}
 function HeaderAction({action}){return h('button',{'aria-label':action.label,className:'dsh-wel-icon-button','data-active':action.active||undefined,disabled:action.disabled||undefined,onClick:action.onClick,title:action.title??action.label,type:'button'},action.icon)}
@@ -1019,6 +1362,8 @@ const TreeStatus=({children,error})=>h('div',{className:'dsh-wel-tree-status','d
 function TreeContextMenu({entry,menuRef,onCopyPath,x,y}){const left=Math.max(4,Math.min(x,window.innerWidth-CONTEXT_MENU_WIDTH-4)),top=Math.max(4,Math.min(y,window.innerHeight-CONTEXT_MENU_HEIGHT-4));return h('div',{'aria-label':entry.path,className:'dsh-wel-context-menu',ref:menuRef,role:'menu',style:{left,top}},h('button',{className:'dsh-wel-context-item',onClick:()=>onCopyPath(entry,false),role:'menuitem',title:'复制文件的完整绝对路径',type:'button'},'复制路径'),h('button',{className:'dsh-wel-context-item',onClick:()=>onCopyPath(entry,true),role:'menuitem',title:'复制相对工作区根目录的路径',type:'button'},'复制相对路径'))}
 function TabContextMenu({menuRef,onCloseOthers,onTogglePin,pinned,x,y}){const left=Math.max(4,Math.min(x,window.innerWidth-CONTEXT_MENU_WIDTH-4)),top=Math.max(4,Math.min(y,window.innerHeight-CONTEXT_MENU_HEIGHT-4));return h('div',{className:'dsh-wel-context-menu',ref:menuRef,role:'menu',style:{left,top}},h('button',{className:'dsh-wel-context-item',onClick:onTogglePin,role:'menuitem',title:pinned?'取消固定此标签页':'固定此标签页并移动到标签开头',type:'button'},pinned?'取消固定':'固定标签'),h('button',{className:'dsh-wel-context-item',onClick:onCloseOthers,role:'menuitem',title:'关闭除当前标签外的所有未固定标签页',type:'button'},'关闭其他标签页'))}
 function EntryDialog({dialog,draft,error,busy,blocked,composingRef,onCancel,onConfirm,onDraft}){if(!dialog)return null;const title=entryDialogTitle(dialog),action=entryDialogAction(dialog);return h('div',{className:'dsh-wel-dialog-backdrop',onMouseDown:e=>{if(e.target===e.currentTarget)onCancel()}},h('div',{'aria-modal':true,className:'dsh-wel-dialog',role:'dialog'},h('div',{className:'dsh-wel-dialog-header'},h('div',{className:'dsh-wel-dialog-title'},title),h('button',{'aria-label':'关闭',className:'dsh-wel-icon-button',disabled:busy,onClick:onCancel,title:'关闭',type:'button'},'×')),h('div',{className:'dsh-wel-dialog-body'},h('input',{'aria-label':'名称',autoFocus:true,className:'dsh-wel-dialog-input',disabled:busy,onChange:e=>onDraft(e.target.value),onCompositionEnd:()=>{composingRef.current=false},onCompositionStart:()=>{composingRef.current=true},onFocus:e=>e.target.select(),onKeyDown:e=>{if(e.key==='Escape'){e.preventDefault();onCancel()}else if(e.key==='Enter'&&!composingRef.current){e.preventDefault();onConfirm()}},value:draft}),error?h('div',{className:'dsh-wel-dialog-error',role:'alert'},error):null),h('div',{className:'dsh-wel-dialog-footer'},h('button',{className:'dsh-wel-text-button',disabled:busy,onClick:onCancel,type:'button'},'取消'),h('button',{className:'dsh-wel-text-button',disabled:blocked,onClick:onConfirm,type:'button'},busy?'处理中…':action))))}
+function EncodingMenu({menuRef,onOpen,onSave,canOpen,canSave,x,y}){const left=Math.max(4,Math.min(x,window.innerWidth-CONTEXT_MENU_WIDTH-4)),top=Math.max(4,Math.min(y,window.innerHeight-CONTEXT_MENU_HEIGHT-4));return h('div',{className:'dsh-wel-context-menu',ref:menuRef,role:'menu',style:{left,top}},h('button',{className:'dsh-wel-context-item',disabled:!canOpen,onClick:onOpen,role:'menuitem',title:canOpen?'用所选编码重新解码并展示此文件':'有未保存的更改，请先保存或取消后再切换编码打开',type:'button'},'以编码打开…'),h('button',{className:'dsh-wel-context-item',disabled:!canSave,onClick:onSave,role:'menuitem',title:canSave?'将当前文件内容用所选编码写回磁盘':'该文件当前不能编辑，无法另存为编码',type:'button'},'另存为编码…'))}
+function EncodingDialog({dialog,options,value,busy,onCancel,onPick,onConfirm}){if(dialog===undefined)return null;const title=dialog.mode==='open'?'以编码打开':'另存为编码',action=dialog.mode==='open'?'打开':'保存';return h('div',{className:'dsh-wel-dialog-backdrop',onMouseDown:e=>{if(e.target===e.currentTarget&&!busy)onCancel()}},h('div',{'aria-modal':true,className:'dsh-wel-dialog',role:'dialog'},h('div',{className:'dsh-wel-dialog-header'},h('div',{className:'dsh-wel-dialog-title'},title),h('button',{'aria-label':'关闭',className:'dsh-wel-icon-button',disabled:busy,onClick:onCancel,title:'关闭',type:'button'},'×')),h('div',{className:'dsh-wel-dialog-body'},h('label',{className:'dsh-wel-settings-label',htmlFor:'dsh-wel-encoding-select'},'文件编码'),h('select',{'aria-label':'文件编码',className:'dsh-wel-highlight-preset-select',disabled:busy,id:'dsh-wel-encoding-select',onChange:e=>onPick(e.target.value),value},options.map(enc=>h('option',{key:enc.id,value:enc.id},enc.label)))),h('div',{className:'dsh-wel-dialog-footer'},h('button',{className:'dsh-wel-text-button',disabled:busy,onClick:onCancel,type:'button'},'取消'),h('button',{className:'dsh-wel-text-button',disabled:busy||options.length===0,onClick:onConfirm,type:'button'},busy?'处理中…':action))))}
 
 function revealPosition(view, reveal) {
   const lineNumber = Math.min(Math.max(1, reveal.line), view.state.doc.lines)
@@ -1030,9 +1375,52 @@ function revealPosition(view, reveal) {
   view.dispatch({ selection: { anchor: from, head: to }, effects: EditorView.scrollIntoView(from, { y: 'center' }) })
 }
 
-function CodeEditor({ file, editing, onContext, onDirty, onSaveShortcut, onScroll, reveal, scrollTop, editorRef }) {
+/* Code-folding helpers backing the Ctrl+K+J / Ctrl+K+<n> shortcuts. Nesting
+   depth is 1-based: a top-level fold region is level 1, one directly inside
+   another fold region is level 2, and so on. */
+function collectFoldableRanges(view) {
+  const state = view.state
+  const seen = new Set()
+  const ranges = []
+  for (let pos = 0; pos < state.doc.length;) {
+    const line = view.lineBlockAt(pos)
+    const range = foldable(state, line.from, line.to)
+    if (range) {
+      const key = `${range.from}:${range.to}`
+      if (!seen.has(key)) {
+        seen.add(key)
+        ranges.push(range)
+      }
+    }
+    pos = line.to + 1
+  }
+  return ranges
+}
+function foldLevelOf(range, ranges) {
+  let depth = 1
+  for (const other of ranges) {
+    if (other !== range && other.from <= range.from && other.to >= range.to) depth += 1
+  }
+  return depth
+}
+/* Fold every foldable region whose nesting depth is exactly `level`. */
+function foldLevel(view, level) {
+  const ranges = collectFoldableRanges(view)
+  const effects = []
+  for (const range of ranges) {
+    if (foldLevelOf(range, ranges) === level) effects.push(foldEffect.of(range))
+  }
+  if (effects.length) {
+    view.dispatch({ effects })
+    return true
+  }
+  return false
+}
+
+function CodeEditor({ file, editing, wrap, onContext, onDirty, onSaveShortcut, onScroll, reveal, scrollTop, editorRef, highlightPreset }) {
   const host = useRef(null)
   const editableCompartment = useRef(new Compartment())
+  const wrapCompartment = useRef(new Compartment())
   const contextRef = useRef(onContext)
   const dirtyRef = useRef(onDirty)
   const saveRef = useRef(onSaveShortcut)
@@ -1062,6 +1450,8 @@ function CodeEditor({ file, editing, onContext, onDirty, onSaveShortcut, onScrol
           keymap.of([
             { key: 'Mod-s', preventDefault: true, run: () => { saveRef.current(); return true } },
             indentWithTab, ...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap,
+            { key: 'Mod-k j', run: unfoldAll },
+            ...Array.from({ length: 9 }, (_, index) => ({ key: `Mod-k ${index + 1}`, run: () => foldLevel(view, index + 1) })),
           ]),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) dirtyRef.current(update.state.sliceDoc())
@@ -1071,6 +1461,7 @@ function CodeEditor({ file, editing, onContext, onDirty, onSaveShortcut, onScrol
             EditorView.editable.of(editing),
             EditorState.readOnly.of(!editing),
           ]),
+          wrapCompartment.current.of(wrap ? EditorView.lineWrapping : []),
           descriptor.extension,
           separatorExtension,
           EditorView.theme({
@@ -1116,20 +1507,27 @@ function CodeEditor({ file, editing, onContext, onDirty, onSaveShortcut, onScrol
   }, [editing])
 
   useEffect(() => {
+    editorRef.current?.dispatch({
+      effects: wrapCompartment.current.reconfigure(wrap ? EditorView.lineWrapping : []),
+    })
+  }, [wrap])
+
+  useEffect(() => {
     const view = editorRef.current
     if (view === undefined || reveal === null) return
     revealPosition(view, reveal)
   }, [reveal])
 
-  return h('div', { className: 'dsh-wel-editor-host', ref: host })
+  return h('div', { className: 'dsh-wel-editor-host', 'data-highlight-preset': highlightPreset ?? HIGHLIGHT_PRESET_DEFAULT, ref: host })
 }
 
 function WorkspaceExplorer({
-  workspace, publishEditorContext, listDirectory, readFile, saveFile, createEntry, renameEntry, storedDraft, storedPreviewSession, persistDraft, persistPreviewSession, clearDraft,
+  workspace, treePortalTarget, sessionTitle, publishEditorContext, listDirectory, readFile, saveFile, createEntry, renameEntry, storedDraft, storedPreviewSession, persistDraft, persistPreviewSession, clearDraft, settingsStore,
 }) {
+  const settings = useSyncExternalStore(settingsStore.subscribe, settingsStore.getSnapshot)
   const initialPreviewSession = previewSessionWithDraft(storedPreviewSession, storedDraft)
   const [directories, setDirectories] = useState(() => new Map())
-  const [expanded, setExpanded] = useState(() => new Set(['']))
+  const [expanded, setExpanded] = useState(() => new Set(['', ...(initialPreviewSession.expanded ?? [])]))
   const [tabs, setTabs] = useState(() => initialPreviewSession.tabs)
   const [activePath, setActivePath] = useState(() => initialPreviewSession.activePath)
   const [selected, setSelected] = useState(() => {
@@ -1143,6 +1541,11 @@ function WorkspaceExplorer({
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [status, setStatus] = useState()
+  const [reloadToken, setReloadToken] = useState(0)
+  const [encodingMenu, setEncodingMenu] = useState()
+  const [encodingDialog, setEncodingDialog] = useState()
+  const [encodingPick, setEncodingPick] = useState('utf-8')
+  const [encodingOptions, setEncodingOptions] = useState(ENCODING_FALLBACK)
   const [draggingPath, setDraggingPath] = useState(null)
   const [dropIndex, setDropIndex] = useState(null)
   const [entryDialog, setEntryDialog] = useState()
@@ -1152,6 +1555,7 @@ function WorkspaceExplorer({
   const [contextMenu, setContextMenu] = useState()
   const [tabContextMenu, setTabContextMenu] = useState()
   const [pinScrollToken, setPinScrollToken] = useState(0)
+  const tabScrollPathRef = useRef(null)
   const [copyNotice, setCopyNotice] = useState()
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -1162,6 +1566,8 @@ function WorkspaceExplorer({
   const searchRevealToken = useRef(0)
   const menuRef = useRef(null)
   const tabMenuRef = useRef(null)
+  const encodingMenuRef = useRef(null)
+  const requestedEncodingRef = useRef()
   const previewTabsRef = useRef(null)
   const copyNoticeTimer = useRef()
   const requests = useRef(new Map())
@@ -1176,6 +1582,8 @@ function WorkspaceExplorer({
   const restoredDraft = useRef(storedDraft)
   const tabsRef = useRef(initialPreviewSession.tabs)
   const activePathRef = useRef(initialPreviewSession.activePath)
+  const expandedRef = useRef(new Set(['', ...(initialPreviewSession.expanded ?? [])]))
+  const sessionEstablishedRef = useRef(false)
   const previewTabsBootstrapped = useRef(Boolean(initialPreviewSession.tabs.length > 0 || initialPreviewSession.activePath !== null))
   const selectedDirectoryPath = selectedLevelPath(selected)
   const activatePath = useCallback((path) => {
@@ -1184,6 +1592,7 @@ function WorkspaceExplorer({
   }, [])
   useLayoutEffect(() => { tabsRef.current = tabs }, [tabs])
   useLayoutEffect(() => { activePathRef.current = activePath }, [activePath])
+  useLayoutEffect(() => { expandedRef.current = expanded }, [expanded])
   const activeTab = useMemo(() => activePath === null ? undefined : tabs.find(tab => tab.path === activePath), [activePath, tabs])
   const hasDirtyTabs = useMemo(() => tabs.some(tab => tab.dirty || tab.saving), [tabs])
   const updateActiveTab = useCallback((patch) => {
@@ -1204,13 +1613,20 @@ function WorkspaceExplorer({
   }, [])
   const persistSessionTabs = useCallback(() => {
     if (persistPreviewSession === undefined) return
-    if (!previewTabsBootstrapped.current && tabsRef.current.length === 0 && activePathRef.current === null) return
-    persistPreviewSession(serializePreviewSession(activePathRef.current, tabsRef.current))
+    const hasTreeExpansion = Array.from(expandedRef.current).some(path => path !== '')
+    const meaningful = previewTabsBootstrapped.current || tabsRef.current.length !== 0 || activePathRef.current !== null || hasTreeExpansion
+    // Skip until this session has established any state: a bare empty mount
+    // must not clobber the workspace-key snapshot of another session. Once
+    // established, keep writing (an empty snapshot deletes the stale entry in
+    // the store action), so collapsing everything back to root also persists.
+    if (!meaningful && !sessionEstablishedRef.current) return
+    if (meaningful) sessionEstablishedRef.current = true
+    persistPreviewSession(serializePreviewSession(activePathRef.current, tabsRef.current, expandedRef.current))
   }, [persistPreviewSession])
   // Persist synchronously at commit (before paint) so a pin and an immediate
   // refresh cannot race the localStorage write; declared after the tabsRef sync
   // effect so it always serializes the freshest tabs.
-  useLayoutEffect(() => { persistSessionTabs() }, [activePath, persistSessionTabs, tabs])
+  useLayoutEffect(() => { persistSessionTabs() }, [activePath, persistSessionTabs, tabs, expanded])
 
   const publishContextState = useCallback((state) => {
     if (activeTab === undefined || preview.state !== 'ready') return
@@ -1288,6 +1704,19 @@ function WorkspaceExplorer({
     }
   }, [abortRequests, persistDraft, persistSessionTabs, publishEditorContext])
 
+  // Navigation never unmounts React, so the unmount cleanup above cannot cover
+  // a refresh or tab close. Persist the final tab session synchronously on
+  // page hide/unload (localStorage writes are synchronous and safe here).
+  useEffect(() => {
+    const flush = () => { persistSessionTabs() }
+    window.addEventListener('pagehide', flush)
+    window.addEventListener('beforeunload', flush)
+    return () => {
+      window.removeEventListener('pagehide', flush)
+      window.removeEventListener('beforeunload', flush)
+    }
+  }, [persistSessionTabs])
+
   useEffect(() => {
     if (!hasDirtyTabs) return undefined
     const warn = (event) => {
@@ -1332,6 +1761,15 @@ function WorkspaceExplorer({
     }
   }, [listDirectory, workspace.workspaceId])
   useEffect(() => { void loadDirectory('') }, [loadDirectory])
+  // Restore the persisted expansion: fetch the listing of every restored
+  // directory so the tree can render its children. Mount-only; the persisted
+  // set already includes every ancestor, so nested folders appear in place.
+  useEffect(() => {
+    for (const path of initialPreviewSession.expanded ?? []) {
+      if (path !== '' && path !== undefined) void loadDirectory(path)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const revealPath = useCallback((entry) => {
     const paths = entry.kind === 'directory'
       ? [...ancestorDirectoryPaths(entry.path), entry.path]
@@ -1361,6 +1799,24 @@ function WorkspaceExplorer({
       revealPath(entry)
     }
   }, [activatePath, revealPath, storedDraft, storedPreviewSession])
+  // Late-arriving restore for tree expansion: if storedPreviewSession becomes
+  // available only after mount, merge its expanded paths and load them. The
+  // hasAll guard keeps this idempotent across store updates.
+  useLayoutEffect(() => {
+    const stored = previewSessionWithDraft(storedPreviewSession, storedDraft)
+    const paths = stored.expanded ?? []
+    if (paths.length === 0) return
+    if (paths.every(path => expandedRef.current.has(path))) return
+    setExpanded(cur => {
+      const merged = new Set(cur)
+      for (const path of paths) merged.add(path)
+      return merged
+    })
+    for (const path of paths) {
+      if (path !== '' && path !== undefined) void loadDirectory(path)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storedDraft, storedPreviewSession])
   const chooseFile = useCallback((entry) => {
     previewTabsBootstrapped.current = true
     setSelected(entry)
@@ -1433,6 +1889,7 @@ function WorkspaceExplorer({
             symlink: false,
           }
         : undefined)
+    const effectiveEncoding = requestedEncodingRef.current ?? tab?.encoding ?? 'utf-8'
     const selection = tab === undefined ? { kind: 'file', name: activePath.slice(activePath.lastIndexOf('/') + 1), path: activePath } : entryFromPreviewTab(tab)
     setSelected(selection)
     setEditing(Boolean(tab?.editing))
@@ -1440,7 +1897,8 @@ function WorkspaceExplorer({
     setSaving(Boolean(tab?.saving))
     setStatus(tab?.status)
     setPreview({ state: 'loading', path: activePath })
-    readFile(workspace.workspaceId, activePath, controller.signal).then((result) => {
+    readFile(workspace.workspaceId, activePath, controller.signal, effectiveEncoding).then((result) => {
+      requestedEncodingRef.current = undefined
       const stored = tab?.dirty ? tab : undefined
       const canRestore = stored !== undefined
         && result.editable !== false
@@ -1456,6 +1914,7 @@ function WorkspaceExplorer({
         symlink: Boolean(selection.symlink),
         content,
         revision: canRestore ? stored.revision : result.revision,
+        encoding: result.encoding ?? effectiveEncoding,
         lineEnding: result.lineEnding ?? 'none',
         bom: Boolean(result.bom),
         size: result.size,
@@ -1484,6 +1943,7 @@ function WorkspaceExplorer({
         dirty: canRestore ? true : Boolean(tab?.dirty),
         draft: content,
         editing: canRestore ? true : Boolean(tab?.editing),
+        encoding: result.encoding ?? effectiveEncoding,
         lineEnding: result.lineEnding ?? 'none',
         name: selection.name,
         revision: (canRestore ? stored.revision : result.revision) ?? null,
@@ -1501,23 +1961,33 @@ function WorkspaceExplorer({
       }
     })
     return () => controller.abort()
-  }, [activePath, clearDraft, publishEditorContext, readFile, storedDraft?.content, storedDraft?.path, updateTab, workspace.workspaceId])
+  }, [activePath, clearDraft, publishEditorContext, readFile, reloadToken, storedDraft?.content, storedDraft?.path, updateTab, workspace.workspaceId])
 
-  const save = useCallback(async () => {
-    if (preview.state !== 'ready' || !dirty || saving || activeTab === undefined) return false
+  const save = useCallback(async (encodingOverride) => {
+    if (preview.state !== 'ready' || saving || activeTab === undefined) return false
+    const forceSaveAs = encodingOverride !== undefined && encodingOverride !== null
+    if (!forceSaveAs && !dirty) return false
+    if (forceSaveAs && (preview.editable === false || preview.readOnlyReason)) {
+      setStatus({ error: true, text: `无法另存为编码：${readOnlyReason(preview)}` })
+      return false
+    }
     const path = activeTab.path
+    const encoding = forceSaveAs ? String(encodingOverride) : (preview.encoding ?? 'utf-8')
     const controller = new AbortController()
     saveController.current = controller
     const text = editorRef.current?.state.sliceDoc() ?? draft
-    const wire = `${preview.bom ? '\uFEFF' : ''}${text}`
+    const savingStatus = { text: forceSaveAs ? `正在保存（${encodingLabel(encoding)}）…` : '正在保存…' }
     setSaving(true)
-    setStatus({ text: '正在保存…' })
-    updateTab(path, { draft: text, dirty: true, saving: true, status: { text: '正在保存…' } })
+    setStatus(savingStatus)
+    updateTab(path, { draft: text, dirty: true, saving: true, status: savingStatus })
     try {
-      const result = await saveFile(workspace.workspaceId, path, wire, preview.revision, controller.signal)
+      const result = await saveFile(workspace.workspaceId, path, text, preview.revision, controller.signal, encoding)
       if (!mounted.current) return false
-      const size = Number.isFinite(result.size) ? result.size : new TextEncoder().encode(wire).byteLength
-      updateTab(path, { baseText: text, bom: Boolean(preview.bom), dirty: false, draft: text, editing: false, lineEnding: preview.lineEnding ?? 'none', revision: result.revision ?? preview.revision ?? null, saving: false, size, status: { text: '保存成功。' } })
+      const savedEncoding = result.encoding ?? encoding
+      const savedBom = Boolean(result.bom)
+      const size = Number.isFinite(result.size) ? result.size : new TextEncoder().encode(text).byteLength
+      const savedStatus = { text: forceSaveAs ? `已保存为 ${encodingLabel(savedEncoding)}。` : '保存成功。' }
+      updateTab(path, { baseText: text, bom: savedBom, dirty: false, draft: text, editing: false, encoding: savedEncoding, lineEnding: preview.lineEnding ?? 'none', revision: result.revision ?? preview.revision ?? null, saving: false, size, status: savedStatus })
       if (activePathRef.current === path) {
         baseText.current = text
         setDraft(text)
@@ -1526,9 +1996,9 @@ function WorkspaceExplorer({
         latestDraft.current = undefined
         clearDraft()
         setPreview(current => current.state === 'ready' && current.path === path
-          ? { ...current, content: text, revision: result.revision ?? current.revision, size, bom: preview.bom }
+          ? { ...current, content: text, encoding: savedEncoding, bom: savedBom, revision: result.revision ?? current.revision, size }
           : current)
-        setStatus({ text: '保存成功。' })
+        setStatus(savedStatus)
       }
       return true
     } catch (error) {
@@ -1573,6 +2043,52 @@ function WorkspaceExplorer({
   useEffect(()=>{if(!searchOpen)return undefined;const timer=setTimeout(()=>{void runSearch(searchQuery)},300);return()=>clearTimeout(timer)},[runSearch,searchOpen,searchQuery])
   useEffect(()=>{if(contextMenu===undefined)return undefined;const inside=event=>{const node=menuRef.current;return node!==null&&event.target instanceof Node&&node.contains(event.target)};const close=()=>setContextMenu(undefined);const onPointerDown=event=>{if(!inside(event))close()};const onContextMenu=event=>{if(!inside(event))close()};const onKeyDown=event=>{if(event.key==='Escape')close()};window.addEventListener('pointerdown',onPointerDown);window.addEventListener('contextmenu',onContextMenu,true);window.addEventListener('keydown',onKeyDown);window.addEventListener('resize',close);window.addEventListener('scroll',close,true);return()=>{window.removeEventListener('pointerdown',onPointerDown);window.removeEventListener('contextmenu',onContextMenu,true);window.removeEventListener('keydown',onKeyDown);window.removeEventListener('resize',close);window.removeEventListener('scroll',close,true)}},[contextMenu])
   useEffect(()=>{if(tabContextMenu===undefined)return undefined;const inside=event=>{const node=tabMenuRef.current;return node!==null&&event.target instanceof Node&&node.contains(event.target)};const close=()=>setTabContextMenu(undefined);const onPointerDown=event=>{if(!inside(event))close()};const onContextMenu=event=>{if(!inside(event))close()};const onKeyDown=event=>{if(event.key==='Escape')close()};window.addEventListener('pointerdown',onPointerDown);window.addEventListener('contextmenu',onContextMenu,true);window.addEventListener('keydown',onKeyDown);window.addEventListener('resize',close);window.addEventListener('scroll',close,true);return()=>{window.removeEventListener('pointerdown',onPointerDown);window.removeEventListener('contextmenu',onContextMenu,true);window.removeEventListener('keydown',onKeyDown);window.removeEventListener('resize',close);window.removeEventListener('scroll',close,true)}},[tabContextMenu])
+  const openWithEncoding = useCallback((encodingId) => {
+    if (dirty) {
+      setStatus({ error: true, text: '有未保存的更改，请先保存或取消后再切换编码打开。' })
+      return
+    }
+    requestedEncodingRef.current = encodingId
+    setReloadToken(token => token + 1)
+  }, [dirty])
+  const openEncodingDialog = useCallback((mode) => {
+    setEncodingMenu(undefined)
+    setEncodingPick(preview.encoding ?? 'utf-8')
+    void fetchEncodings().then(list => {
+      if (mounted.current) setEncodingOptions(list.length > 0 ? list : ENCODING_FALLBACK)
+    })
+    setEncodingDialog({ mode })
+  }, [preview.encoding])
+  const closeEncodingDialog = useCallback(() => {
+    if (saving) return
+    setEncodingDialog(undefined)
+  }, [saving])
+  const confirmEncodingDialog = useCallback(() => {
+    if (encodingDialog === undefined || encodingPick === '') return
+    const selected = encodingPick
+    if (encodingDialog.mode === 'open') {
+      setEncodingDialog(undefined)
+      openWithEncoding(selected)
+    } else {
+      void save(selected).then(ok => {
+        if (mounted.current && ok) setEncodingDialog(undefined)
+      })
+    }
+  }, [encodingDialog, encodingPick, openWithEncoding, save])
+  useEffect(() => {
+    if (encodingMenu === undefined) return undefined
+    const inside = event => { const node = encodingMenuRef.current; return node !== null && event.target instanceof Node && node.contains(event.target) }
+    const close = () => setEncodingMenu(undefined)
+    const onPointerDown = event => { if (!inside(event)) close() }
+    const onContextMenu = event => { if (!inside(event)) close() }
+    const onKeyDown = event => { if (event.key === 'Escape') close() }
+    window.addEventListener('pointerdown', onPointerDown)
+    window.addEventListener('contextmenu', onContextMenu, true)
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('resize', close)
+    window.addEventListener('scroll', close, true)
+    return () => { window.removeEventListener('pointerdown', onPointerDown); window.removeEventListener('contextmenu', onContextMenu, true); window.removeEventListener('keydown', onKeyDown); window.removeEventListener('resize', close); window.removeEventListener('scroll', close, true) }
+  }, [encodingMenu])
   const renderDirectory=(path,depth)=>{const dir=directories.get(path);if(!dir||dir.state==='loading')return h(TreeStatus,{key:`${path}:loading`},'正在读取…');if(dir.state==='error')return h(TreeStatus,{error:true,key:`${path}:error`},dir.message);const rows=dir.entries.map(entry=>{const open=expanded.has(entry.path);return h(Fragment,{key:entry.path},h(TreeRow,{depth,entry,expanded:open,onContextMenu:openContextMenu,onDirectory:toggleDirectory,onFile:chooseFile,onRename:beginRename,selected:selected?.path===entry.path}),entry.kind==='directory'&&open?renderDirectory(entry.path,depth+1):null)});if(dir.truncated)rows.push(h(TreeStatus,{key:`${path}:truncated`},'此目录条目过多，仅显示前一部分。'));if(!rows.length)rows.push(h(TreeStatus,{key:`${path}:empty`},'空目录'));return rows}
   const closeTab = useCallback((path) => {
     const current = tabsRef.current
@@ -1627,6 +2143,10 @@ function WorkspaceExplorer({
     setSelected(entry)
     revealPath(entry)
   }, [activatePath, revealPath, updateTab])
+  const scrollTabIntoView = useCallback((path) => {
+    tabScrollPathRef.current = path
+    setPinScrollToken(value => value + 1)
+  }, [])
   const pinTab = useCallback((path) => {
     setTabs(current => {
       const tab = current.find(item => item.path === path)
@@ -1634,13 +2154,23 @@ function WorkspaceExplorer({
       const pinned = { ...tab, pinned: true }
       return orderPinnedFirst([pinned, ...current.filter(item => item.path !== path)])
     })
-    if (activePathRef.current === path) setPinScrollToken(value => value + 1)
-  }, [])
+    if (activePathRef.current === path) scrollTabIntoView(path)
+  }, [scrollTabIntoView])
   const unpinTab = useCallback((path) => {
-    setTabs(current => current.some(tab => tab.path === path && tab.pinned)
-      ? current.map(tab => tab.path === path ? { ...tab, pinned: false } : tab)
-      : current)
-  }, [])
+    setTabs(current => {
+      const tab = current.find(item => item.path === path)
+      if (tab === undefined || !tab.pinned) return current
+      const unpinned = { ...tab, pinned: false }
+      // Move the unpinned tab right after the last pinned one so the pinned
+      // block stays grouped at the front.
+      const rest = current.filter(item => item.path !== path)
+      let lastPinnedIndex = -1
+      for (let i = 0; i < rest.length; i += 1) if (rest[i].pinned) lastPinnedIndex = i
+      const insertAt = lastPinnedIndex < 0 ? 0 : lastPinnedIndex + 1
+      return [...rest.slice(0, insertAt), unpinned, ...rest.slice(insertAt)]
+    })
+    scrollTabIntoView(path)
+  }, [scrollTabIntoView])
   const dropTabAt = useCallback((insertAt) => {
     if (draggingPath === null || insertAt === null) return
     setTabs(current => {
@@ -1669,20 +2199,34 @@ function WorkspaceExplorer({
     setDraggingPath(null)
     setDropIndex(null)
   }, [dropTabAt])
-  // When a file is opened from the tree the tab strip may overflow; scroll it
-  // so the newly activated tab is fully visible instead of requiring a drag.
+  // Scroll the tab strip so a target tab is fully visible. The target is the
+  // tab requested by pin/unpin or a preview-body click; otherwise (a file
+  // opened from the tree) it is the newly activated tab. One-shot: the
+  // requested path is consumed after the check so later active-path changes
+  // fall back to the active tab again.
   useLayoutEffect(() => {
     const strip = previewTabsRef.current
-    if (strip === null || activePath === null) return
-    const activeNode = strip.querySelector('.dsh-wel-preview-tab[data-active]')
-    if (activeNode === null) return
+    const target = tabScrollPathRef.current ?? activePath
+    if (strip === null || target === null) return
+    let tabNode = null
+    for (const child of strip.children) {
+      if (child instanceof HTMLElement && child.classList.contains('dsh-wel-preview-tab') && child.dataset.path === target) {
+        tabNode = child
+        break
+      }
+    }
+    if (tabNode === null) return
     const stripRect = strip.getBoundingClientRect()
-    const nodeRect = activeNode.getBoundingClientRect()
-    if (nodeRect.left >= stripRect.left - 1 && nodeRect.right <= stripRect.right + 1) return
+    const nodeRect = tabNode.getBoundingClientRect()
+    if (nodeRect.left >= stripRect.left - 1 && nodeRect.right <= stripRect.right + 1) {
+      tabScrollPathRef.current = null
+      return
+    }
     const delta = nodeRect.left < stripRect.left
       ? nodeRect.left - stripRect.left
       : nodeRect.right - stripRect.right
     strip.scrollTo({ left: strip.scrollLeft + delta, behavior: 'smooth' })
+    tabScrollPathRef.current = null
   }, [activePath, pinScrollToken])
   // Hovering the tab strip and rolling the wheel scrolls it horizontally when
   // it overflows; a native non-passive listener is required so the default
@@ -1709,15 +2253,18 @@ function WorkspaceExplorer({
     body = h('div', { className: 'dsh-wel-empty' },
       h('div', { className: 'dsh-wel-error-card' }, preview.message))
   } else {
+    const highlightPreset = highlightPresetOf(settings, colorGroupOf({ kind: 'file', name: preview.name }))
     body = h(Fragment, null,
       preview.truncated ? h('div', { className: 'dsh-wel-banner' }, '文件较大，当前仅显示开头部分，不能编辑。') : null,
       status ? h('div', { className: 'dsh-wel-status', 'data-error': status.error || undefined }, status.text) : null,
-      h('div', { className: 'dsh-wel-preview-body' },
+      h('div', { className: 'dsh-wel-preview-body', onClick: () => { if (activePathRef.current !== null) scrollTabIntoView(activePathRef.current) } },
         h(CodeEditor, {
           key: `${preview.path}:${String(preview.revision ?? '')}`,
           editorRef,
           editing,
           file: preview,
+          highlightPreset,
+          wrap: settings.wrap === true,
           onContext: publishContextState,
           onDirty: (text) => {
             const nextDirty = text !== baseText.current
@@ -1807,6 +2354,7 @@ function WorkspaceExplorer({
       className: 'dsh-wel-preview-tab',
       'data-active': tab.path === activePath || undefined,
       'data-dragging': draggingPath === tab.path || undefined,
+      'data-path': tab.path,
       draggable: true,
       key: tab.path,
       onContextMenu: event => { event.preventDefault(); setTabContextMenu({ path: tab.path, x: event.clientX, y: event.clientY }) },
@@ -1843,19 +2391,7 @@ function WorkspaceExplorer({
   }
   if (draggingPath !== null && dropIndex === tabs.length) previewTabNodes.push(h('div', { 'aria-hidden': true, className: 'dsh-wel-preview-drop-indicator', key: 'drop:end' }))
   const tabMenuTarget = tabContextMenu === undefined ? undefined : tabs.find(tab => tab.path === tabContextMenu.path)
-  return h(Fragment, null,
-    entryDialog ? h(EntryDialog, {
-      blocked: entryDialogBlocked,
-      busy: entryBusy,
-      composingRef,
-      dialog: entryDialog,
-      draft: entryDraft,
-      error: entryDialogError,
-      onCancel: closeEntryDialog,
-      onConfirm: submitEntryDialog,
-      onDraft: value => { setEntryDraft(value); setEntryError(undefined) },
-    }) : null,
-    h('section', { className: 'dsh-wel-tree' },
+  const treeSection = h('section', { className: 'dsh-wel-tree' },
       searchOpen
         ? h(Fragment, null,
           h('header', { className: 'dsh-wel-panel-header dsh-wel-search-header' },
@@ -1902,28 +2438,52 @@ function WorkspaceExplorer({
             action: refresh,
             actionLabel: '刷新文件树',
             subtitle: workspace.path,
-            title: '工作区文件',
+            title: sessionTitle ?? '工作区文件',
           }),
           h('div', { className: 'dsh-wel-tree-scroll' }, renderDirectory('', 0)),
           contextMenu ? h(TreeContextMenu, { entry: contextMenu.entry, menuRef, onCopyPath: copyEntryPath, x: contextMenu.x, y: contextMenu.y }) : null,
           copyNotice ? h('div', { className: 'dsh-wel-copy-notice', role: 'status' }, copyNotice) : null,
         ),
-    ),
+  )
+  return h(Fragment, null,
+    entryDialog ? h(EntryDialog, {
+      blocked: entryDialogBlocked,
+      busy: entryBusy,
+      composingRef,
+      dialog: entryDialog,
+      draft: entryDraft,
+      error: entryDialogError,
+      onCancel: closeEntryDialog,
+      onConfirm: submitEntryDialog,
+      onDraft: value => { setEntryDraft(value); setEntryError(undefined) },
+    }) : null,
+    encodingMenu ? h(EncodingMenu, { canOpen: !dirty, canSave: preview.state === 'ready' && preview.editable !== false && !preview.readOnlyReason, menuRef: encodingMenuRef, onOpen: () => openEncodingDialog('open'), onSave: () => openEncodingDialog('save'), x: encodingMenu.x, y: encodingMenu.y }) : null,
+    encodingDialog ? h(EncodingDialog, { busy: encodingDialog.mode === 'save' && saving, dialog: encodingDialog, onCancel: closeEncodingDialog, onConfirm: confirmEncodingDialog, onPick: setEncodingPick, options: encodingOptions, value: encodingPick }) : null,
+    treePortalTarget ? createPortal(treeSection, treePortalTarget) : null,
     h('section', { className: 'dsh-wel-preview' },
       tabs.length ? h('div', { ref: previewTabsRef, className: 'dsh-wel-preview-tabs', role: 'tablist', 'aria-label': '文件预览标签', onDragLeave: handleTabsDragLeave, onDragOver: updateDropIndex, onDrop: handleTabsDrop }, previewTabNodes) : null,
       tabContextMenu ? h(TabContextMenu, { menuRef: tabMenuRef, onCloseOthers: () => { setTabContextMenu(undefined); closeOtherTabs(tabContextMenu.path) }, onTogglePin: () => { setTabContextMenu(undefined); if (tabMenuTarget?.pinned) unpinTab(tabContextMenu.path); else pinTab(tabContextMenu.path) }, pinned: Boolean(tabMenuTarget?.pinned), x: tabContextMenu.x, y: tabContextMenu.y }) : null,
-      h('header', { className: 'dsh-wel-panel-header' },
+      h('header', { className: 'dsh-wel-panel-header', onContextMenu: (event) => { event.preventDefault(); if (preview.state === 'ready' && activeTab !== undefined) setEncodingMenu({ x: event.clientX, y: event.clientY }) } },
         h('div', { className: 'dsh-wel-panel-title' },
           h('strong', { title: activeTab?.path ?? '文件预览' }, activeTab?.name ?? '文件预览'),
           h('div', { className: 'dsh-wel-preview-header-meta' },
             activeTab ? h('span', { title: activeTab.path }, activeTab.path) : h('span', null, workspace.title),
             activeTab ? h('span', { className: 'dsh-wel-language' }, fileLabel(activeTab.name)) : null,
             size ? h('span', null, size) : null,
+            preview.state === 'ready' && preview.encoding ? h('span', { className: 'dsh-wel-encoding', title: '文件编码' }, encodingLabel(preview.encoding)) : null,
             dirty ? h('span', { className: 'dsh-wel-dirty', title: '未保存的更改' }, '●') : null,
           ),
         ),
         preview.state === 'ready'
           ? h(Fragment, null,
+            h('button', {
+              'aria-pressed': settings.wrap === true,
+              className: 'dsh-wel-text-button',
+              'data-active': settings.wrap === true || undefined,
+              onClick: () => settingsStore.actions.setWrap(settings.wrap !== true),
+              title: settings.wrap === true ? '关闭自动换行' : '开启自动换行',
+              type: 'button',
+            }, '自动换行'),
             editing
               ? h(Fragment, null,
                 h('button', { className: 'dsh-wel-text-button', disabled: saving, onClick: cancel, type: 'button' }, '取消'),
@@ -1938,13 +2498,18 @@ function WorkspaceExplorer({
   )
 }
 
-function EmptyWorkspaceExplorer(){return h(Fragment,null,h('section',{className:'dsh-wel-tree'},h(PanelHeader,{title:'工作区文件',subtitle:'未选择工作区'}),h('div',{className:'dsh-wel-empty'},'请选择一个工作区中的会话')),h('section',{className:'dsh-wel-preview'},h(PanelHeader,{title:'文件预览',subtitle:'未选择工作区'}),h('div',{className:'dsh-wel-empty'},'选择工作区后可浏览文件')))}
-function ExplorerSettingsSection({ settingsStore }) {
+function EmptyWorkspaceExplorer({ treePortalTarget, sessionTitle }) {
+  const treeSection = h('section', { className: 'dsh-wel-tree' }, h(PanelHeader, { title: sessionTitle ?? '工作区文件', subtitle: '未选择工作区' }), h('div', { className: 'dsh-wel-empty' }, '请选择一个工作区中的会话'))
+  return h(Fragment, null,
+    treePortalTarget ? createPortal(treeSection, treePortalTarget) : null,
+    h('section', { className: 'dsh-wel-preview' }, h(PanelHeader, { title: '文件预览', subtitle: '未选择工作区' }), h('div', { className: 'dsh-wel-empty' }, '选择工作区后可浏览文件')))
+}function ExplorerSettingsSection({ settingsStore }) {
   const settings = useSyncExternalStore(settingsStore.subscribe, settingsStore.getSnapshot)
   const rowHeight = settings.rowHeight ?? ROW_HEIGHT_DEFAULT
   const chatFontSize = settings.chatFontSize ?? CHAT_FONT_SIZE_DEFAULT
   const atSizeDefaults = rowHeight === ROW_HEIGHT_DEFAULT && chatFontSize === CHAT_FONT_SIZE_DEFAULT
   const customizedCount = Object.keys(settings.fileColors ?? {}).length
+  const customizedPresetCount = Object.keys(settings.highlightPresets ?? {}).length
   return h('div', { className: 'dsh-wel-explorer-settings' },
     h('div', { className: 'dsh-wel-settings-row' },
       h('label', { className: 'dsh-wel-settings-label', htmlFor: 'dsh-wel-row-height' }, '每行高度'),
@@ -2009,11 +2574,43 @@ function ExplorerSettingsSection({ settingsStore }) {
         onClick: () => settingsStore.actions.resetFileColors(),
         type: 'button',
       }, '恢复全部默认颜色')),
-    h('div', { className: 'dsh-wel-settings-hint' }, '调整左侧文件树的行高与对话文字大小；图标徽标按文件类型配色，未修改的组使用默认颜色。'),
+    h('div', { className: 'dsh-wel-explorer-divider' }),
+    h('div', { className: 'dsh-wel-file-colors-title' }, '代码高亮预设'),
+    h('div', { className: 'dsh-wel-file-colors' },
+      FILE_COLOR_GROUPS.map(({ group, label }) => h('div', { className: 'dsh-wel-file-color-row', key: `preset-${group}` },
+        h('span', { className: 'dsh-wel-file-color-name', title: label }, label),
+        h('select', {
+          'aria-label': `${label} 高亮预设`,
+          className: 'dsh-wel-highlight-preset-select',
+          onChange: e => settingsStore.actions.setHighlightPreset(group, e.target.value),
+          value: highlightPresetOf(settings, group),
+        },
+          HIGHLIGHT_PRESETS.map(preset => h('option', { key: preset.id, value: preset.id }, preset.label))),
+        h('button', {
+          className: 'dsh-wel-file-color-reset',
+          disabled: settings.highlightPresets?.[group] === undefined || undefined,
+          onClick: () => settingsStore.actions.resetHighlightPreset(group),
+          title: `恢复 ${label} 的默认高亮预设`,
+          type: 'button',
+        }, '重置'),
+      ))),
+    h('div', { className: 'dsh-wel-file-colors-actions' },
+      h('button', {
+        className: 'dsh-wel-text-button',
+        disabled: customizedPresetCount === 0 || undefined,
+        onClick: () => settingsStore.actions.resetHighlightPresets(),
+        type: 'button',
+      }, '恢复全部默认预设')),
+    h('div', { className: 'dsh-wel-settings-hint' }, '调整左侧文件树的行高与对话文字大小；图标徽标按文件类型配色，并为每种文件类型选择编辑器代码高亮预设，未修改的项使用默认值。'),
   )
 }
 function ExplorerToggle(props) {
-  const open = props.useStore(s => s.explorerOpen)
+  // The explorer pane store is a shared engine instance passed through the
+  // inject face (like AppFrame's), not a store-seat handle: the store seat
+  // resolves instances by calling handle.create(), which an already-created
+  // instance does not provide. Reading the instance directly keeps one shared
+  // geometry store between this toggle and the AppFrame.
+  const open = useSyncExternalStore(props.explorerPaneStore.subscribe, props.explorerPaneStore.getSnapshot)
   const label = open ? '关闭资源管理器' : '打开资源管理器'
   return h('button', {
     'aria-expanded': open,
@@ -2022,7 +2619,7 @@ function ExplorerToggle(props) {
     className: 'dsh-wel-explorer-toggle',
     'data-open': open || undefined,
     'data-rail': !props.wide || undefined,
-    onClick: props.actions.toggleExplorer,
+    onClick: () => props.explorerPaneStore.actions.toggleExplorer(),
     title: label,
     type: 'button',
   },
@@ -2036,6 +2633,18 @@ function AppFrame(props) {
   const panels = props.useStore(state => state)
   const previewPanels = useSyncExternalStore(props.previewSessionsStore.subscribe, props.previewSessionsStore.getSnapshot)
   const settings = useSyncExternalStore(props.settingsStore.subscribe, props.settingsStore.getSnapshot)
+  const panes = useSyncExternalStore(props.explorerPaneStore.subscribe, props.explorerPaneStore.getSnapshot)
+  // Mirror the runtime sidebar width into the persisted explorer pane store:
+  // the layout store owns the live value but cannot persist wholesale (it also
+  // carries large file drafts), so the pane store's small layout value is the
+  // durable copy, rehydrated into the layout store's init on the next load.
+  const sidebarMirrorRef = useRef(null)
+  useLayoutEffect(() => {
+    if (sidebarMirrorRef.current !== panels.sidebar) {
+      sidebarMirrorRef.current = panels.sidebar
+      props.explorerPaneStore.actions.setSidebar(panels.sidebar)
+    }
+  }, [panels.sidebar, props.explorerPaneStore])
   const chatFontScale = (settings.chatFontSize ?? CHAT_FONT_SIZE_DEFAULT) / CHAT_FONT_SIZE_DEFAULT
   // One accent custom property per color group; unset groups resolve to their
   // default inside the CSS rule's var() fallback (the value here is the
@@ -2044,6 +2653,12 @@ function AppFrame(props) {
   for (const { group } of FILE_COLOR_GROUPS) fileColorVars[`--dsh-wel-file-${group}`] = fileColorOf(settings, group)
   const currentSession = props.useSessions(state => state.current)
   const sessionIds = props.useSessions(state => state.ids)
+  // The workspace-files panel header names the current session (its durable
+  // title) instead of a fixed label, so the browsing panel reads as belonging
+  // to the session being worked on; fall back when no session is selected.
+  const sessionTitle = props.useSessions(state => state.current === undefined
+    ? undefined
+    : state.byId[state.current]?.title)
   const currentCwd = props.useSessions(state => state.current === undefined
     ? undefined
     : state.byId[state.current]?.cwd)
@@ -2052,6 +2667,26 @@ function AppFrame(props) {
   const workspaces = props.useWorkspaces(state => state.items)
   const recent = props.useWorkspaces(state => state.recentWorkspaceId)
   const [resizing, setResizing] = useState(false)
+  // Migration: entries persisted before clean-tab drafts were slimmed carry
+  // full file text on every tab; re-serializing them on every write keeps the
+  // whole value over the localStorage quota. Re-write them once through the
+  // slimming path (dirty drafts are preserved, clean text dropped). Idempotent:
+  // after migration no entry has fat clean tabs, so the guard skips.
+  useEffect(() => {
+    const sessions = previewPanels?.previewSessions
+    if (sessions === undefined || typeof sessions !== 'object') return
+    const hasFat = Object.values(sessions).some(value =>
+      (value?.tabs ?? []).some(tab => tab?.dirty === false && typeof tab?.draft === 'string' && tab.draft !== ''))
+    if (!hasFat) return
+    for (const key of Object.keys(sessions)) {
+      const value = sessions[key]
+      if (value === undefined) continue
+      const fat = (value?.tabs ?? []).some(tab => tab?.dirty === false && typeof tab?.draft === 'string' && tab.draft !== '')
+      if (!fat) continue
+      props.previewSessionsStore.actions.rememberPreviewSession(key, serializePreviewSession(value.activePath, value.tabs))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const workspace = useMemo(() => currentSession !== undefined
     ? workspaces.find(item => item.sessionIds.includes(currentSession) || item.path === currentCwd)
     : workspaces.find(item => item.workspaceId === recent),
@@ -2073,8 +2708,18 @@ function AppFrame(props) {
   const previewSessionKey = previewSessionSelection.key
   const storedPreviewSession = previewSessionSelection.value
   const persistPreviewSession = useCallback((value) => {
-    if (previewSessionKey !== undefined) props.previewSessionsStore.actions.rememberPreviewSession(previewSessionKey, value)
-  }, [previewSessionKey, props.previewSessionsStore])
+    // Write the latest snapshot to every key the restore may pick: the current
+    // session key (highest restore priority), the selected key (which falls
+    // back to the workspace key when the session has no own snapshot yet), and
+    // the workspace anchor. Writing only the selected key left the session key
+    // stale once the workspace fallback took over, and the restore then
+    // preferred that stale session snapshot ("tabs reverted to old state").
+    const keys = new Set()
+    if (previewSessionKey !== undefined) keys.add(previewSessionKey)
+    if (currentSession !== undefined) keys.add(String(currentSession))
+    if (workspaceId !== undefined) keys.add(String(workspaceId))
+    for (const key of keys) props.previewSessionsStore.actions.rememberPreviewSession(key, value)
+  }, [currentSession, previewSessionKey, props.previewSessionsStore, workspaceId])
   const last = useRef(currentSession)
   const viewportRef = useRef(null)
   const [viewportWidth, setViewportWidth] = useState(0)
@@ -2097,7 +2742,60 @@ function AppFrame(props) {
     observer.observe(viewport)
     return () => { observer.disconnect() }
   }, [])
+  const asideRef = useRef(null)
+  // The sidebar shell (harness ui-sidebar SidebarRoot) owns the New Session
+  // button and the browsing region, and its slots cannot be redeclared by this
+  // plugin. Instead two DOM containers are maintained inside the shell — the
+  // top actions row (replacing the hidden New Session button) and the files
+  // region seat — and this plugin renders its own React content into them via
+  // portals. The observer re-asserts the containers on structural rebuilds;
+  // in-place React updates leave foreign nodes alone, so nothing flickers.
+  const [sidebarChrome, setSidebarChrome] = useState(null)
+  useLayoutEffect(() => {
+    const aside = asideRef.current
+    if (aside === null) return undefined
+    const ensure = () => {
+      const rootDiv = aside.querySelector('[data-slot="sidebar"] > div')
+      if (rootDiv === null) return null
+      let top = rootDiv.querySelector(':scope > .dsh-wel-sidebar-top-actions')
+      if (top === null) {
+        top = document.createElement('div')
+        top.className = 'dsh-wel-sidebar-top-actions'
+        rootDiv.insertBefore(top, rootDiv.querySelector(':scope > button'))
+      }
+      const workspacesOutlet = rootDiv.querySelector(':scope [data-slot="sidebar.workspaces"]')
+      let files = null
+      if (workspacesOutlet !== null) {
+        const regionArea = workspacesOutlet.parentElement
+        if (regionArea !== null) {
+          files = regionArea.querySelector(':scope > .dsh-wel-sidebar-files')
+          if (files === null) {
+            files = document.createElement('div')
+            files.className = 'dsh-wel-sidebar-files'
+            regionArea.append(files)
+          }
+        }
+      }
+      return { top, files }
+    }
+    let current = ensure()
+    if (current !== null) setSidebarChrome(current)
+    const observer = new MutationObserver(() => {
+      const next = ensure()
+      if (next === null) return
+      setSidebarChrome(prev => (prev !== null && prev.top === next.top && prev.files === next.files ? prev : next))
+    })
+    observer.observe(aside, { childList: true, subtree: true })
+    return () => {
+      observer.disconnect()
+      setSidebarChrome(null)
+      aside.querySelectorAll('.dsh-wel-sidebar-top-actions, .dsh-wel-sidebar-files').forEach(node => node.remove())
+    }
+  }, [])
   const collapsed = panels.sidebar === 0
+  const view = panels.view === 'files' ? 'files' : 'sessions'
+  const filesMode = view === 'files'
+  const filesActive = filesMode && !collapsed
   const sidebarMax = viewportWidth > 0
     ? Math.max(SIDEBAR_MIN, Math.floor(viewportWidth * SIDEBAR_MAX_RATIO))
     : SIDEBAR_MAX_FALLBACK
@@ -2107,14 +2805,17 @@ function AppFrame(props) {
     ? Math.max(sidebar + TREE_MIN + PREVIEW_MIN, Math.floor(viewportWidth * EXPLORER_MAX_RATIO))
     : SIDEBAR_MAX_FALLBACK + TREE_MAX + PREVIEW_MAX
   const explorerMax = Math.max(TREE_MIN + PREVIEW_MIN, leftStackMax - sidebar)
-  const treeVisibleMax = Math.max(TREE_MIN, explorerMax - PREVIEW_MIN)
-  const tree = panels.explorerOpen ? clamp(panels.tree, TREE_MIN, treeVisibleMax) : 0
+  // The workspace file tree lives exclusively in the sidebar files region and
+  // is revealed there only in the files view; the main frame's tree track
+  // stays at zero, so opening the explorer shows only the file preview next to
+  // the chat. The tree always portals into the sidebar seat (hidden while in
+  // the sessions view) and the preview is never displaced by it.
+  const tree = 0
   const previewMax = Math.max(PREVIEW_MIN, explorerMax - tree)
-  const preview = panels.explorerOpen ? clamp(panels.preview, PREVIEW_MIN, previewMax) : 0
-  const treeMax = Math.max(TREE_MIN, explorerMax - preview)
-  const treeBoundary = sidebar + tree
-  const previewBoundary = treeBoundary + preview
-  return h('div',{ref:viewportRef,className:'dsh-wel-viewport'},h('main',{className:'dsh-wel-frame','data-explorer-closed':!panels.explorerOpen||undefined,'data-resizing':resizing||undefined,style:{'--dsh-wel-preview':`${preview}px`,'--dsh-wel-sidebar':`${sidebar}px`,'--dsh-wel-tree':`${tree}px`,'--dsh-wel-row-height':`${settings.rowHeight ?? ROW_HEIGHT_DEFAULT}px`,'--dsh-wel-chat-font-scale':String(chatFontScale),...fileColorVars}},h('aside',{className:'dsh-wel-sidebar'},props.renderSlot('sidebar',{collapsed,width:sidebar})),workspace?h(WorkspaceExplorer,{key:previewSessionKey ?? workspace.workspaceId,clearDraft:clearWorkspaceDraft,createEntry:props.createEntry,listDirectory:props.listDirectory,persistDraft:persistWorkspaceDraft,persistPreviewSession,publishEditorContext,readFile:props.readFile,renameEntry:props.renameEntry,saveFile:props.saveFile,storedDraft:panels.drafts[String(workspace.workspaceId)],storedPreviewSession,workspace}):h(EmptyWorkspaceExplorer),h('section',{className:'dsh-wel-chat'},props.renderSlot('conversation',{})),!collapsed?h(ResizeHandle,{label:'调整会话面板宽度',left:sidebar,max:sidebarMax,min:SIDEBAR_MIN,onDragging:setResizing,onResize:width=>props.actions.setSidebar(width,sidebarMax),value:sidebar}):null,panels.explorerOpen?h(ResizeHandle,{label:'调整文件树宽度',left:treeBoundary,max:treeMax,min:TREE_MIN,onDragging:setResizing,onResize:width=>props.actions.setTree(width,treeMax),value:tree}):null,panels.explorerOpen?h(ResizeHandle,{label:'调整文件预览宽度',left:previewBoundary,max:previewMax,min:PREVIEW_MIN,onDragging:setResizing,onResize:width=>props.actions.setPreview(width,previewMax),value:preview}):null,h('aside',{className:'dsh-wel-details','data-closed':!panels.detailsOpen||!detailsCapable||undefined},props.renderSlot('details',{})),h('div',{className:'dsh-wel-overlay','data-shell-overlay':true},props.renderSlot('shell.overlay',{}))))}
+  const preview = filesActive || panes.explorerOpen ? clamp(panes.preview ?? PREVIEW_DEFAULT, PREVIEW_MIN, previewMax) : 0
+  const previewBoundary = sidebar + preview
+  const treePortalTarget = sidebarChrome?.files ?? null
+  return h('div',{ref:viewportRef,className:'dsh-wel-viewport'},h('main',{className:'dsh-wel-frame','data-explorer-closed':!panes.explorerOpen&&!filesActive||undefined,'data-sidebar-collapsed':collapsed||undefined,'data-sidebar-files':filesActive||undefined,'data-resizing':resizing||undefined,style:{'--dsh-wel-preview':`${preview}px`,'--dsh-wel-sidebar':`${sidebar}px`,'--dsh-wel-row-height':`${settings.rowHeight ?? ROW_HEIGHT_DEFAULT}px`,'--dsh-wel-chat-font-scale':String(chatFontScale),...fileColorVars}},h('aside',{className:'dsh-wel-sidebar',ref:asideRef},props.renderSlot('sidebar',{collapsed,width:sidebar}),sidebarChrome?.top?createPortal(h(SidebarTopActions,{collapsed,view,width:sidebar,onSelectSessions:()=>{props.actions.setView('sessions')},onSelectFiles:()=>{if(collapsed)props.toggleSidebar();props.actions.setView('files')}}),sidebarChrome.top):null),workspace?h(WorkspaceExplorer,{key:previewSessionKey ?? workspace.workspaceId,clearDraft:clearWorkspaceDraft,createEntry:props.createEntry,listDirectory:props.listDirectory,persistDraft:persistWorkspaceDraft,persistPreviewSession,publishEditorContext,readFile:props.readFile,renameEntry:props.renameEntry,saveFile:props.saveFile,settingsStore:props.settingsStore,storedDraft:panels.drafts[String(workspace.workspaceId)],storedPreviewSession,sessionTitle,treePortalTarget,workspace}):h(EmptyWorkspaceExplorer,{sessionTitle,treePortalTarget}),h('section',{className:'dsh-wel-chat'},props.renderSlot('conversation',{})),!collapsed?h(ResizeHandle,{label:'调整会话面板宽度',left:sidebar,max:sidebarMax,min:SIDEBAR_MIN,onDragging:setResizing,onResize:width=>props.actions.setSidebar(width,sidebarMax),value:sidebar}):null,(panes.explorerOpen||filesActive)?h(ResizeHandle,{label:'调整文件预览宽度',left:previewBoundary,max:previewMax,min:PREVIEW_MIN,onDragging:setResizing,onResize:width=>props.explorerPaneStore.actions.setPreview(width,previewMax),value:preview}):null,h('aside',{className:'dsh-wel-details','data-closed':!panels.detailsOpen||!detailsCapable||undefined},props.renderSlot('details',{})),h('div',{className:'dsh-wel-overlay','data-shell-overlay':true},props.renderSlot('shell.overlay',{}))))}
 
 export const inject = ['slots', 'theme', 'sessions']
 export function apply(ctx) {
@@ -2122,6 +2823,7 @@ export function apply(ctx) {
   const layoutStore = createLayoutStore()
   const previewSessionsStore = createPreviewSessionStore().create()
   const settingsStore = createExplorerSettingsStore().create()
+  const explorerPaneStore = createExplorerPaneStore().create()
   const editorContexts = new EditorContextController()
   ctx.effect(() => {
     if (typeof document === 'undefined') return undefined
@@ -2135,8 +2837,8 @@ export function apply(ctx) {
   }, 'workspace-explorer-layout: styles')
   ctx.effect(() => installEditorContextMessageCompactor(), 'workspace-explorer-layout: compact logged editor context')
   const listDirectory = (workspaceId, path, signal) => requestJson('tree', String(workspaceId), path, signal)
-  const readFile = (workspaceId, path, signal) => requestJson('file', String(workspaceId), path, signal)
-  const saveFile = (workspaceId, path, content, revision, signal) => putFile(workspaceId, path, content, revision, signal)
+  const readFile = (workspaceId, path, signal, encoding) => requestJson('file', String(workspaceId), path, signal, encoding)
+  const saveFile = (workspaceId, path, content, revision, signal, encoding) => putFile(workspaceId, path, content, revision, signal, encoding)
 
   ctx.effect(() => {
     const disposeService = ctx.reflect.provide('layout', layout)
@@ -2159,9 +2861,11 @@ export function apply(ctx) {
           renameEntry: (workspaceId, path, name, signal) => renameWorkspaceEntry(workspaceId, path, name, signal),
           retainEditorSessions: sessionIds => { editorContexts.retain(sessionIds) },
           readFile,
+          explorerPaneStore,
           previewSessionsStore,
           saveFile,
           settingsStore,
+          toggleSidebar: () => { layout.toggleSidebar() },
         }
       },
     }, AppFrame)
@@ -2189,7 +2893,8 @@ export function apply(ctx) {
   }, EditorContextPrefix))
   ctx.effect(() => () => { editorContexts.dispose() }, 'workspace-explorer-layout: editor context state')
   ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
-    name: 'sidebar.footer.action', id: 'workspace-explorer-toggle', order: 100, store: layoutStore,
+    name: 'sidebar.footer.action', id: 'workspace-explorer-toggle', order: 100,
+    inject: () => ({ explorerPaneStore }),
   }, ExplorerToggle))
   // The browser Settings page owns every explorer preference in one section:
   // file-tree row height, chat font size, and the per-group icon color scheme

@@ -1,123 +1,92 @@
-# DeepSeek Harness Four-Pane Workspace Layout Plugin
+# DeepSeek Harness 工作区四栏布局插件
 
-English | [中文](README.zh.md)
+[English](README.en.md) | 中文
 
-This bundle replaces the DeepSeek Harness Web root layout with:
+此 bundle 将 DeepSeek Harness Web 的根布局替换为四栏：Session/工作区选择器、当前工作区文件树、高亮文件视图与受控编辑器、聊天。插件保留现有侧栏、会话、详情与全局浮层的 Slot 合约，内置的新建会话、会话列表、设置、聊天、工具详情、审批等仍由原插件提供；工具详情以右侧抽屉覆盖在四栏布局上，不额外占用常驻栏位。
 
-```text
-Session/workspace selector | Current workspace file tree | Highlighted file view and guarded editor | Chat
-```
+## 功能
 
-The plugin preserves the existing sidebar, conversation, details, and global-overlay Slot contracts. Built-in plugins therefore continue to own new-session creation, workspace session lists, settings, chat, tool details, approvals, and related behavior. Tool details open as a right-side drawer over the four-pane layout instead of consuming a permanent pane.
+- 会话属于某 Workspace 时自动显示其文件树（会话 `cwd` 与 Workspace 路径一致时同样识别）；目录优先于文件排列，支持逐级展开、折叠与手动刷新。
+- CodeMirror 6 按文件名或后缀显示行号与语法高亮，未知类型按纯文本显示。
+- 预览编辑器中 `Ctrl+K+J` 展开所有已折叠区域；`Ctrl+K+1..9` 按层级折叠代码（如 `Ctrl+K+2` 折叠所有第二层级的折叠区域）。
+- 显式进入编辑模式，提供“保存”“取消”与 `Ctrl/Cmd+S`，不会自动保存；切换文件不会静默丢弃未保存内容。
+- 打开的文件进入按 Session 保存的预览标签页：可 `X` 关闭、拖拽重排，选中时在树中定位并恢复垂直滚动位置；标签页跨重载恢复，草稿缓存保留在页面内存、不写入 `localStorage`。
+- 保存按读取时的文件修订版本执行；磁盘内容已变化时保留草稿并报告冲突，不自动覆盖。
+- 拒绝二进制、非 UTF-8 与工作区外符号链接；截断的大文件、混合换行文件与经符号链接的路径只读。
+- 可在选中层级新建文件/文件夹，`F2` 重命名；不提供删除或上传。
+- 侧边栏底部、设置按钮上方提供“资源管理器”开关；关闭时收起文件树与编辑栏，重新打开时恢复栏宽、目录展开与文件选择。会话栏、文件树栏与编辑栏均可拖动调宽（打开时左侧最多 80%），布局参数与开关状态以 `localStorage` 全局持久化。
+- 每类文件类型组可在资源管理器设置页选择编辑器高亮预设（默认、经典、暖色、冷色、单色、XML (VS Code)），按类型记忆于 `localStorage`。
+- 目录条目、文件大小、条目名称与新建/重命名请求正文均设可配置上限（默认每目录 1000 项、文件 1 MiB、名称 255 字节、请求正文 4 KiB）。
+- 编辑器上下文经现有输入 dock 显示为输入框外的不可编辑前缀：启用发送时冻结上下文，文件模式渲染 `<opened_file>...</opened_file>`、选中文本模式渲染 `<selection>...</selection>`（无选区时不携带文件字节），灰色发送不附加上下文；Host 校验并把它拼接到直接用户提示前，对话页折叠成气泡上方显示文件名与行列范围的一行摘要。
+- 使用 Harness 主题语义变量，支持亮色、暗色与系统主题。
 
-## Features
+## 语法高亮
 
-- Automatically shows the Workspace file tree when the current Session belongs to a Workspace.
-- Also recognizes a Workspace when the current Session `cwd` equals its path, including supported child-session cases.
-- Sorts directories before files and supports incremental expansion, collapse, and manual refresh.
-- Uses CodeMirror 6 to show line numbers and syntax highlighting based on special filenames or extensions; unknown types use plain text.
-- Shows the open file as a non-editable Composer prefix outside the textarea through the existing session-scoped input dock. Keyboard editing, cut, undo, and selection cannot remove it; clicking toggles it between active and persistently gray for the current Session.
-- On each active send, the plugin freezes the editor context at the send boundary and renders one of two prompt envelopes: `<opened_file>...</opened_file>` for file-only sends, or `<selection>...</selection>` for selected text. With no selection, it sends only the opened-file envelope and never includes file bytes. Gray sends attach nothing. An explicit “发送上下文” action handles context-only sends without adding text to the editable draft.
-- The Host validates the request, renders the envelope text, and prepends it to that direct user prompt. In the conversation view, the plugin folds that envelope into a compact row above the bubble that shows the file name and the line/column range; hovering that row reveals the full injected XML. The raw envelope still lives in the ordinary user message history, and each active turn is submitted independently without hash deduplication.
-- Enters editing only on an explicit action and provides **Save**, **Cancel**, and `Ctrl/Cmd+S`; it never autosaves.
-- Never discards unsaved content silently during file changes: the user must save, discard, or continue editing. Closing the explorer preserves the current editor state.
-- Opens files in per-Session preview tabs, lets the user close them with `X` or reorder them by drag, reveals the matching file in the tree when a tab is selected, and restores each tab's vertical scroll position.
-- Retains the workspace draft cache in page memory across Session or Workspace switches and persists open preview tabs plus each tab's vertical scroll position across reloads and Session or Workspace returns. The draft cache stays out of `localStorage`; preview tabs use browser persistence.
-- Saves against the revision observed during the read. A disk change preserves the draft and reports a conflict instead of overwriting automatically.
-- Rejects binary files, non-UTF-8 files, and symbolic links outside the Workspace. Truncated large files, mixed-line-ending files, and paths traversing symbolic links are read-only.
-- Creates files and folders in the selected level, renames the selected file or folder with `F2`, and still provides no delete or upload operation.
-- Adds an Explorer toggle at the bottom of the left sidebar immediately above Settings. Its sizing, spacing, hover behavior, and active theme color match the Settings entry in both wide and collapsed modes.
-- Places `sidebar.footer.action` extension buttons in separate vertical rows, preventing Mobile Preview, Explorer, and Settings from crowding one row.
-- Closing Explorer collapses both the file tree and editor so chat sits beside the sidebar; reopening restores widths, expanded directories, and file selection.
-- Supports drag resizing for the Session, file-tree, and file-editor panes; when Explorer is open, the left pane group can keep expanding up to 80% of the visible layout and the chat column can keep shrinking, while preserving the existing sidebar expand/collapse control.
-- Applies configurable directory, file, entry-name, and mutation-body limits: 1,000 entries per directory, 1 MiB per browsed or edited file, 255 UTF-8 bytes per entry name, and 4 KiB per create or rename request by default.
-- Uses Harness semantic theme variables and supports light, dark, and system themes.
+内置 JavaScript/JSX、TypeScript/TSX、JSON、HTML、CSS/SCSS/Less、Markdown/MDX、Python、SQL、XML/SVG、YAML、C/C++、Java、Rust、PHP、Go、Shell、PowerShell、Ruby、TOML 与 Dockerfile 高亮；`Makefile`、`.gitignore`、`.env`、`LICENSE` 与未知扩展名以纯文本显示，仍可浏览与编辑。
 
-## Syntax highlighting
+## 安装
 
-The initial bundle includes JavaScript/JSX, TypeScript/TSX, JSON, HTML, CSS/SCSS/Less, Markdown/MDX, Python, SQL, XML/SVG, YAML, C/C++, Java, Rust, PHP, Go, Shell, PowerShell, Ruby, TOML, and Dockerfile highlighting. `Makefile`, `.gitignore`, `.env`, `LICENSE`, and unknown extensions remain browsable and editable in plain-text mode.
-
-## Installation
-
-Run from Git Bash, Linux, or WSL:
+在 Git Bash、Linux 或 WSL 中执行：
 
 ```sh
 cd C:/GreenSoftware/deepseek-harness/deepseek-harness-plugin/dsh-workspace-explorer-layout
-bash ./install.sh
+bash ./install.sh          # 默认安装到 web profile
+bash ./install.sh web      # 也可显式指定 profile
 ```
 
-The default target is the `web` profile. A profile can also be supplied explicitly:
+脚本优先使用 PATH 中的 `dsh`；当前目录属于 Harness checkout 且 PATH 无 `dsh` 时自动使用 `pnpm --dir <harness-root> dsh`，也可用 `DSH_BIN` 指定可执行文件。安装完成后停止并重启原有 Web 进程，然后刷新 `http://127.0.0.1:3080`；脚本不会启动第二个服务器。
 
-```sh
-bash ./install.sh web
-```
-
-The script first uses `dsh` from PATH. When the current directory belongs to a DeepSeek Harness source checkout and PATH has no `dsh`, it uses `pnpm --dir <harness-root> dsh`. `DSH_BIN` may name an executable without additional arguments:
-
-```sh
-DSH_BIN=/path/to/dsh bash ./install.sh web
-```
-
-After installation, stop and restart the existing Web process, then refresh `http://127.0.0.1:3080`. The installation script does not start a second server.
-
-## Uninstallation
+## 卸载
 
 ```sh
 bash ./uninstall.sh
 ```
 
-Restart the existing Web process after removal. The built-in `ui-layout` returns when the bundle layer is removed.
+卸载后同样需要重启 Web 进程；移除 bundle layer 后内置 `ui-layout` 自动恢复。
 
-## Configuration
+## 配置
 
-The plugin row in `cordis.patch.yml` accepts:
+`cordis.patch.yml` 中插件 row 接受：
 
-| Field | Default | Description |
+| 字段 | 默认值 | 说明 |
 |---|---:|---|
-| `enableEditing` | `false` | Enables the Host write endpoint; this bundle patch explicitly sets it to `true`. |
-| `maxContextBytes` | `65536` | Explorer preflight maximum for selected-text UTF-8 bytes, range 1024–1048576; path-only contexts submit no file bytes. |
-| `maxPromptContextBytes` | `69632` | Host maximum for the complete rendered context, including the `<opened_file>...</opened_file>` or `<selection>...</selection>` envelope and any selected text, range 4096–2097152. |
-| `maxContextSourceBytes` | `10485760` | Maximum raw source bytes read for clean revision verification, range 1024–104857600. Dirty or truncated selections use the submitted browser text instead. |
-| `maxEditableBytes` | `1048576` | Maximum UTF-8 bytes saved for one file, range 1024–10485760. |
-| `maxEntryNameBytes` | `255` | Maximum UTF-8 bytes allowed for one new or renamed entry name, range 1–1024. |
-| `maxEntriesPerDirectory` | `1000` | Maximum entries returned for one directory, range 1–10000. |
-| `maxMutationBodyBytes` | `4096` | Maximum JSON bytes accepted by create and rename requests, range 128–65536. |
-| `maxPreviewBytes` | `1048576` | Maximum bytes read and returned for one file, range 1024–10485760. |
+| `enableEditing` | `false` | 是否启用 Host 写入接口；本 bundle 显式设为 `true`。 |
+| `maxContextBytes` | `65536` | 选中文本 UTF-8 预检上限（1024–1048576）；仅路径上下文不提交文件字节。 |
+| `maxPromptContextBytes` | `69632` | Host 对完整渲染上下文（含封装与选中文本）的上限（4096–2097152）。 |
+| `maxContextSourceBytes` | `10485760` | clean 修订校验最多读取的原始文件字节（1024–104857600）。 |
+| `maxEditableBytes` | `1048576` | 单文件可保存的最大 UTF-8 字节（1024–10485760）。 |
+| `maxEntryNameBytes` | `255` | 新建/重命名条目名称最大 UTF-8 字节（1–1024）。 |
+| `maxEntriesPerDirectory` | `1000` | 单目录返回的最大条目数（1–10000）。 |
+| `maxMutationBodyBytes` | `4096` | create/rename 请求最大 JSON 字节（128–65536）。 |
+| `maxPreviewBytes` | `1048576` | 单文件读取并返回的最大字节（1024–10485760）。 |
 
-Edit the bundle's `cordis.patch.yml` to change these values. To prevent pnpm from reusing an installed local `file:` copy, run `uninstall.sh`, then `install.sh`, and finally restart the Web process.
+改配置直接编辑 bundle 的 `cordis.patch.yml`；为避免 pnpm 复用已安装的本地 `file:` 副本，先运行 `uninstall.sh`，再运行 `install.sh`，最后重启 Web 进程。
 
-## Security boundary
+## 安全边界
 
-Host endpoints accept only registered Workspace IDs and relative paths. Every read or write resolves the real path and confirms that the target remains under the canonical Workspace root, preventing access through `..`, absolute paths, or symbolic links that leave the Workspace. The endpoints also enforce Host, Origin, and Fetch-Metadata source checks equivalent in purpose to the built-in `/api` routes.
+Host 接口只接受已登记的 Workspace ID 与相对路径，每次读写都解析真实路径并确认目标仍位于 Workspace 规范根目录内，`..`、绝对路径与跳出 Workspace 的符号链接均不可访问；接口同时执行与内置 `/api` 同目的的 Host、Origin 与 Fetch-Metadata 来源检查。
 
-The write endpoint accepts `PUT` only when `enableEditing` is enabled, and the body must be bounded UTF-8 text. The Host enforces the complete byte bound while receiving the stream and validates a supplied `Content-Length`. Requests must carry the read-time revision in `If-Match`; a mismatch returns a conflict without overwriting disk. The target must be an existing regular file reached without any symbolic link. The create and rename entry endpoints follow the same containment checks, require single-segment names, refuse existing targets, and avoid overwriting unrelated paths. The Host commits file writes through a same-directory temporary file, file synchronization, and atomic rename while preserving the original permission mode when possible.
+写入接口仅在 `enableEditing` 开启时接受 `PUT`，正文必须是有上限的 UTF-8 文本，且必须携带读取时的 `If-Match` 修订版本，版本不一致返回冲突而不覆盖；写入目标必须是已存在且不经过任何符号链接的普通文件。create/rename 沿用相同的路径包含校验，要求单段名称、拒绝已存在目标。Host 通过同目录临时文件、文件同步与原子重命名提交，并尽量保留原权限模式。
 
-Editor context accepts only a relative path in a Workspace that owns the current Session either through its membership projection or through the Session's canonical cwd. A selection context carries the exact primary editor selection and its range; a path-only context carries no file bytes and renders as the fixed `<opened_file>...</opened_file>` envelope. The Host rejects symbolic links, validates clean selections against their disk revision, renders selected text as the fixed `<selection>...</selection>` envelope, and returns the rendered text to the plugin's send bridge. The bridge prepends that text to the direct prompt, so the ordinary Session log records the exact model-visible context. The browser conversation view folds that same envelope into a compact row above the bubble, showing only the file name and line/column range; path mode still remains file-content-free. Clean-selection disk verification reads at most 10 MiB; a preview truncated by `maxPreviewBytes` submits visible selection text with browser authority instead. History renders the logged user message and does not reread the current editor or disk.
+编辑器上下文只接受拥有当前 Session 的 Workspace 内相对路径（拥有关系来自 membership projection 或会话规范化 cwd）；仅路径上下文不携带文件字节。Host 拒绝符号链接，按磁盘修订校验 clean 选区，`maxPreviewBytes` 截断预览时以浏览器提交文本为权威，并把渲染文本拼接在直接提示前，因此普通 Session 日志记录实际模型可见上下文；对话页把它折叠成气泡上方显示文件名与行列范围的一行摘要，历史只渲染已记录的用户消息，不重新读取当前编辑器或磁盘。
 
-These constraints govern only the explorer's file endpoints and Composer context. They do not change Agent permission policy, sandboxing, or tool capability. The endpoints provide application-level path-containment checks for trusted local UI use; they do not replace Harness kernel-level isolation against malicious concurrent local code.
+这些限制只约束资源管理器自己的文件接口与 Composer 上下文，不改变 agent 的权限策略、沙箱或工具能力；接口为受信任本地 UI 操作提供应用级路径包含校验，不替代 Harness 的内核级沙箱。
 
-## Project structure
+## 项目结构
 
 ```text
 .
 ├── package.json                         # Installable bundle manifest
-├── cordis.patch.yml                     # Disables the built-in root layout and mounts this plugin
-├── install.sh
-├── uninstall.sh
+├── cordis.patch.yml                     # 禁用内置根布局并挂载本插件
+├── install.sh / uninstall.sh
 └── packages/client/ui-workspace-explorer-layout/
-    ├── package.json
-    ├── THIRD_PARTY_NOTICES.md           # Licenses for bundled editor dependencies
-    ├── pnpm-lock.yaml                   # Independent browser-build dependency lock
-    ├── tsdown.config.mjs                # Bundles CodeMirror into one Client artifact
-    ├── src/client/index.js              # Browser source
-    └── lib/
-        ├── index.js                     # Host: bounded Workspace read, save, create, and rename API
-        ├── invariant.js
-        └── client.js                    # Prebuilt four-pane layout, file tree, multi-tab preview, and editor
+    ├── src/client/index.js              # 浏览器源码
+    ├── lib/index.js                     # Host：有界的 Workspace 读、保存、新建、重命名 API
+    └── lib/client.js                    # 预构建四栏布局、文件树与编辑器
 ```
 
-CodeMirror and its language modules are bundled into the prebuilt plain-JavaScript Client artifact, so installation does not run project builds or tests. To maintain the source, run `pnpm install --ignore-workspace --config.auto-install-peers=false` in the inner package and then run `pnpm bundle` to regenerate `lib/client.js`.
+CodeMirror 与语言模块已内联到预构建的普通 JavaScript Client bundle，安装时无需在项目内运行构建或测试。维护源码时，在内层包目录执行 `pnpm install --ignore-workspace --config.auto-install-peers=false`，再运行 `pnpm bundle` 重新生成 `lib/client.js`。
 
-## Compatibility
+## 兼容性说明
 
-This version targets a DeepSeek Harness `0.1.x` checkout that provides the existing `conversation.input.dock` Slot, the session input resolver, and the conversation send service. The editor-context behavior is implemented entirely by this bundle; it does not require modified Harness source or a structured Composer-context core extension. The send bridge intentionally adapts the concrete 0.1.x `sendSession`, input-submit, and queue-steer seams because those operations are not public cross-package contracts; a future Harness release may require a bundle-only bridge update. A higher-priority profile or home patch that re-enables `ui-layout` competes for the root Slot; retain this bundle layer's `ui-layout` disable entry.
+针对提供 `conversation.input.dock` Slot、Session 输入 resolver 与发送服务的 Harness `0.1.x` checkout 编写。编辑器上下文功能完全由本 bundle 实现，不要求修改 Harness 源码；发送桥适配 0.1.x 的具体 send/输入提交/队列 steer seam，未来版本可能只需更新 bundle 内桥接代码。其他高优先级 profile/home patch 若重新启用 `ui-layout`，会与本插件同时占用根 Slot；请保留本 bundle 对 `ui-layout` 的禁用设置。

@@ -20,7 +20,7 @@
     "install.sh",
     "uninstall.sh",
     "README.md",
-    "README.zh.md",
+    "README.en.md",
     "LICENSE",
     "packages/client/ui-workspace-explorer-layout/lib/**/*.js",
     "packages/client/ui-workspace-explorer-layout/package.json",

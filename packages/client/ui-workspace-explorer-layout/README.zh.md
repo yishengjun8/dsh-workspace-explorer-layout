@@ -7,7 +7,7 @@
 - Node/Host 入口 `lib/index.js` 注册 `/workspace-explorer-layout/api`，按 Workspace ID 列目录、读取有上限的 UTF-8 文件，按 membership 或规范化 cwd 授权当前 Session，并在显式启用时通过修订版本校验、单段名称校验和原子替换保存已有普通文件，同时支持新建文件和文件夹以及重命名已有文件和文件夹。
 - Browser 入口 `lib/client.js` 提供 `ctx.layout` 兼容服务，占用根 Slot，继续声明 `sidebar`、`conversation`、`details` 和 `shell.overlay`，在根布局内加入文件树及 CodeMirror 6 文件浏览器/编辑器，让打开后的资源管理器最多扩展到可见布局的 80% 并使右侧对话栏继续收缩，在树中提供新建文件/文件夹和 `F2` 重命名操作，并向 `sidebar.footer.action` 注册位于设置入口正上方的资源管理器开关。
 - Browser 入口还通过现有 `conversation.input.dock` Slot 注册不可编辑的编辑器上下文行。前缀显示已打开文件路径和 CodeMirror 主选区，位于草稿之外，在列变窄时会跟随下方聊天框的宽度收缩，条本身略微加高，图标和文字也会稍微向右偏移，并可按 Session 在启用与持续灰色之间切换；草稿为空时还提供只发送上下文的操作。
-- 文件树开头的类型徽标按文件类型颜色分组着色（目录、TypeScript、JavaScript、JSON、标记、样式、Markdown、日志、Python、Shell、配置、C 系、其他、受阻）。浏览器设置页新增「资源管理器设置」标签页，把资源管理器的全部偏好集中在一起：文件树行高与对话文字大小滑块，以及按分组自定义的图标颜色方案（即时预览）；未修改的分组自动使用默认色，并分别支持一键恢复大小或全部颜色默认。
+- 文件树开头的类型徽标按文件类型颜色分组着色（目录、TypeScript、JavaScript、JSON、标记、样式、Markdown、日志、Python、C#、Shell、配置、C 系、其他、受阻）。浏览器设置页新增「资源管理器设置」标签页，把资源管理器的全部偏好集中在一起：文件树行高与对话文字大小滑块、按分组自定义的图标颜色方案（即时预览），以及按文件类型选择的代码高亮预设（默认、经典、暖色、冷色、单色，外加每种代码语言对应的 VS Code 配色与 Visual Studio 2022 配色）。每个语言分组默认采用各自的 VS Code 预设——XML、Python、JSON、TypeScript、JavaScript、CSS、Markdown、Shell、配置与 C/C++——而 C# 默认采用 Visual Studio 2022 预设——并支持一键恢复大小、全部颜色或全部预设。
 - `lib/invariant.js` 声明包级 invariant companion；路径包含和写入资格校验在每次 Host 请求中执行。
 
 layout 提供方有意不硬注入 `conversation`：conversation 插件本身消费 `layout`，因此 bundle 在激活后通过子注入 patch 现有 `sendSession` seam，并向 `conversation.input.dock` 注册编辑器上下文行，避免形成激活依赖环。
