@@ -40,7 +40,7 @@ const SIDEBAR_DEFAULT = 280, SIDEBAR_COLLAPSED = 56, SIDEBAR_MIN = 240, SIDEBAR_
 const EXPLORER_MAX_RATIO = 0.8
 const TREE_DEFAULT = 280, TREE_MIN = 220, TREE_MAX = 520
 const PREVIEW_DEFAULT = 420, PREVIEW_MIN = 280, PREVIEW_MAX = 760, RESIZE_STEP = 12
-const CONTEXT_MENU_WIDTH = 176, CONTEXT_MENU_HEIGHT = 84
+const CONTEXT_MENU_WIDTH = 176, CONTEXT_MENU_HEIGHT = 124
 const ROW_HEIGHT_DEFAULT = 28, ROW_HEIGHT_MIN = 20, ROW_HEIGHT_MAX = 48
 const CHAT_FONT_SIZE_DEFAULT = 16, CHAT_FONT_SIZE_MIN = 13, CHAT_FONT_SIZE_MAX = 20
 const EXPLORER_SETTINGS_STORE_KEY = 'dsh.workspace.explorer.settings.v1'
@@ -615,7 +615,9 @@ class EditorContextController {
     this.records = new Map()
     this.disabledSessions = new Set()
     this.stores = new Map()
-    this.latest = undefined
+    // Last published context per session id: activation restores a session's
+    // own value only, never a foreign session's.
+    this.latest = new Map()
   }
   active(sessionId) { return this.records.has(sessionId) && !this.disabledSessions.has(sessionId) }
   storeFor(sessionId) {
@@ -641,9 +643,11 @@ class EditorContextController {
     })
   }
   update(sessionId, value) {
-    this.latest = value
-    if (value === undefined) this.records.delete(sessionId)
-    else {
+    if (value === undefined) {
+      this.latest.delete(sessionId)
+      this.records.delete(sessionId)
+    } else {
+      this.latest.set(sessionId, value)
       this.records.set(sessionId, Object.freeze({
         ...value,
         ...(value.selection === undefined ? {} : { selection: Object.freeze({ ...value.selection }) }),
@@ -657,13 +661,17 @@ class EditorContextController {
     this.stores.get(sessionId)?.set(this.project(sessionId))
   }
   activate(sessionId) {
-    if (this.latest !== undefined) this.update(sessionId, this.latest)
+    // Restore only this session's own last published context; a foreign
+    // session's value must never leak into the session being activated.
+    const own = this.latest.get(sessionId)
+    if (own !== undefined) this.update(sessionId, own)
     this.stores.get(sessionId)?.set(this.project(sessionId))
   }
   retain(sessionIds) {
     const live = new Set(sessionIds)
     for (const sessionId of this.records.keys()) if (!live.has(sessionId)) this.records.delete(sessionId)
     for (const sessionId of this.disabledSessions) if (!live.has(sessionId)) this.disabledSessions.delete(sessionId)
+    for (const sessionId of this.latest.keys()) if (!live.has(sessionId)) this.latest.delete(sessionId)
     for (const [sessionId, store] of this.stores) {
       if (live.has(sessionId)) continue
       store.set(EMPTY_EDITOR_CONTEXT_VIEW)
@@ -688,13 +696,16 @@ class EditorContextController {
     return {
       ...common,
       mode: 'selection',
+      // The decode encoding the editor displayed; the server verifies a clean
+      // selection against this same decode.
+      encoding: record.encoding,
       dirty: record.dirty,
       ...(record.revision === undefined ? {} : { revision: record.revision }),
       selection: { ...record.selection },
     }
   }
   dispose() {
-    this.latest = undefined
+    this.latest.clear()
     this.records.clear()
     this.disabledSessions.clear()
     for (const store of this.stores.values()) store.set(EMPTY_EDITOR_CONTEXT_VIEW)
@@ -1118,11 +1129,35 @@ class PromptContextBridge {
     patch?.input.notify('error', message)
   }
 }
+class WorkspaceApiError extends Error {
+  constructor(code, message, status) {
+    super(message)
+    this.name = 'WorkspaceApiError'
+    this.code = code
+    this.status = status
+  }
+}
 async function requestJson(endpoint, workspaceId, path, signal, encoding) { const query=new URLSearchParams({workspaceId,path});if(encoding!==undefined&&encoding!==null)query.set('encoding',String(encoding));const response=await fetch(`${API_PREFIX}/${endpoint}?${query}`,{method:'GET',headers:{accept:'application/json'},credentials:'same-origin',signal});let payload;try{payload=await response.json()}catch(error){if(error?.name==='AbortError')throw error;throw new WorkspaceApiError('invalid-response',`工作区接口返回了无效响应（HTTP ${response.status}）`,response.status)}if(!response.ok){const failure=payload?.error;throw new WorkspaceApiError(typeof failure?.code==='string'?failure.code:'request-failed',typeof failure?.message==='string'?failure.message:`读取工作区失败（HTTP ${response.status}）`,response.status)}return payload }
 async function putFile(workspaceId,path,content,revision,signal,encoding){const query=new URLSearchParams({workspaceId:String(workspaceId),path});if(encoding!==undefined&&encoding!==null)query.set('encoding',String(encoding));const headers={'content-type':'text/plain; charset=utf-8',accept:'application/json'};if(revision!==undefined&&revision!==null)headers['if-match']=String(revision);const response=await fetch(`${API_PREFIX}/file?${query}`,{method:'PUT',headers,credentials:'same-origin',body:content,signal});let payload;try{payload=await response.json()}catch(error){if(error?.name==='AbortError')throw error;throw new WorkspaceApiError('invalid-response',`保存接口返回了无效响应（HTTP ${response.status}）`,response.status)}if(!response.ok){const failure=payload?.error;throw new WorkspaceApiError(typeof failure?.code==='string'?failure.code:'save-failed',typeof failure?.message==='string'?failure.message:`保存文件失败（HTTP ${response.status}）`,response.status)}return payload}
 async function renderContext(sessionId,context,signal){const response=await fetch(`${API_PREFIX}/context`,{method:'POST',headers:{accept:'application/json','content-type':'application/json'},credentials:'same-origin',body:JSON.stringify({...context,sessionId:String(sessionId)}),signal});let payload;try{payload=await response.json()}catch(error){if(error?.name==='AbortError')throw error;throw new WorkspaceApiError('invalid-response',`编辑器上下文接口返回了无效响应（HTTP ${response.status}）`,response.status)}if(!response.ok){const failure=payload?.error;throw new WorkspaceApiError(typeof failure?.code==='string'?failure.code:'context-failed',typeof failure?.message==='string'?failure.message:`无法提交编辑器上下文（HTTP ${response.status}）`,response.status)}if(typeof payload?.text!=='string')throw new WorkspaceApiError('invalid-response','编辑器上下文接口缺少文本结果',response.status);return payload.text}
 async function mutateEntry(method,workspaceId,path,payload,signal){const query=new URLSearchParams({workspaceId:String(workspaceId),path});const response=await fetch(`${API_PREFIX}/entry?${query}`,{method,headers:{accept:'application/json','content-type':'application/json'},credentials:'same-origin',body:JSON.stringify(payload),signal});let result;try{result=await response.json()}catch(error){if(error?.name==='AbortError')throw error;throw new WorkspaceApiError('invalid-response',`工作区修改接口返回了无效响应（HTTP ${response.status}）`,response.status)}if(!response.ok){const failure=result?.error;throw new WorkspaceApiError(typeof failure?.code==='string'?failure.code:'entry-failed',typeof failure?.message==='string'?failure.message:`工作区修改失败（HTTP ${response.status}）`,response.status)}return result}
 async function requestSearch(workspaceId,query,caseSensitive,signal){const params=new URLSearchParams({workspaceId:String(workspaceId),q:query,caseSensitive:caseSensitive?'true':'false'});const response=await fetch(`${API_PREFIX}/search?${params}`,{method:'GET',headers:{accept:'application/json'},credentials:'same-origin',signal});let payload;try{payload=await response.json()}catch(error){if(error?.name==='AbortError')throw error;throw new WorkspaceApiError('invalid-response',`搜索接口返回了无效响应（HTTP ${response.status}）`,response.status)}if(!response.ok){const failure=payload?.error;throw new WorkspaceApiError(typeof failure?.code==='string'?failure.code:'search-failed',typeof failure?.message==='string'?failure.message:`搜索失败（HTTP ${response.status}）`,response.status)}return payload}
+async function revealInExplorer(workspaceId, path, signal) {
+  const query = new URLSearchParams({ workspaceId: String(workspaceId), path })
+  const response = await fetch(`${API_PREFIX}/reveal?${query}`, { method: 'POST', headers: { accept: 'application/json' }, credentials: 'same-origin', signal })
+  let payload
+  try {
+    payload = await response.json()
+  } catch (error) {
+    if (error?.name === 'AbortError') throw error
+    throw new WorkspaceApiError('invalid-response', `在资源管理器中打开接口返回了无效响应（HTTP ${response.status}）`, response.status)
+  }
+  if (!response.ok) {
+    const failure = payload?.error
+    throw new WorkspaceApiError(typeof failure?.code === 'string' ? failure.code : 'reveal-failed', typeof failure?.message === 'string' ? failure.message : `在资源管理器中打开失败（HTTP ${response.status}）`, response.status)
+  }
+  return payload
+}
 const createWorkspaceEntry=(workspaceId,path,kind,name,signal)=>mutateEntry('POST',workspaceId,path,{kind,name},signal)
 const renameWorkspaceEntry=(workspaceId,path,name,signal)=>mutateEntry('PATCH',workspaceId,path,{name},signal)
 function parentPath(path){const index=path.lastIndexOf('/');return index<0?'':path.slice(0,index)}
@@ -1356,14 +1391,15 @@ function SidebarTopActions({ collapsed, view, width, onSelectSessions, onSelectF
 
 function ResizeHandle({label,left,value,min,max,onResize,onDragging}){const[dragging,setDragging]=useState(false),origin=useRef(0),base=useRef(0);const start=useCallback(e=>{e.preventDefault();e.currentTarget.setPointerCapture(e.pointerId);origin.current=e.clientX;base.current=value;setDragging(true);onDragging(true)},[onDragging,value]);const move=useCallback(e=>{if(e.currentTarget.hasPointerCapture(e.pointerId))onResize(clamp(base.current+e.clientX-origin.current,min,max))},[max,min,onResize]);const end=useCallback(e=>{if(!e.currentTarget.hasPointerCapture(e.pointerId))return;e.currentTarget.releasePointerCapture(e.pointerId);onResize(clamp(base.current+e.clientX-origin.current,min,max));setDragging(false);onDragging(false)},[max,min,onDragging,onResize]);return h('div',{'aria-label':label,'aria-orientation':'vertical','aria-valuemax':max,'aria-valuemin':min,'aria-valuenow':value,className:'dsh-wel-splitter','data-dragging':dragging||undefined,onKeyDown:e=>{if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();onResize(clamp(value+(e.key==='ArrowLeft'?-RESIZE_STEP:RESIZE_STEP),min,max))}},onLostPointerCapture:()=>{setDragging(false);onDragging(false)},onPointerCancel:end,onPointerDown:start,onPointerMove:move,onPointerUp:end,role:'separator',style:{left},tabIndex:0})}
 function HeaderAction({action}){return h('button',{'aria-label':action.label,className:'dsh-wel-icon-button','data-active':action.active||undefined,disabled:action.disabled||undefined,onClick:action.onClick,title:action.title??action.label,type:'button'},action.icon)}
-function PanelHeader({title,subtitle,action,actionLabel,actions=[]}){const items=[...actions];if(action)items.push({label:actionLabel,onClick:action,icon:h(IconRefresh)});return h('header',{className:'dsh-wel-panel-header'},h('div',{className:'dsh-wel-panel-title'},h('strong',{title},title),subtitle?h('span',{title:subtitle},subtitle):null),items.length?h('div',{className:'dsh-wel-panel-actions'},items.map(item=>h(HeaderAction,{action:item,key:item.label}))):null)}
+function PanelHeader({title,subtitle,action,actionLabel,actions=[],onContextMenu}){const items=[...actions];if(action)items.push({label:actionLabel,onClick:action,icon:h(IconRefresh)});return h('header',{className:'dsh-wel-panel-header'},h('div',{className:'dsh-wel-panel-title',onContextMenu},h('strong',{title},title),subtitle?h('span',{title:subtitle},subtitle):null),items.length?h('div',{className:'dsh-wel-panel-actions'},items.map(item=>h(HeaderAction,{action:item,key:item.label}))):null)}
 function TreeRow({entry,depth,expanded,selected,onContextMenu,onDirectory,onFile,onRename}){const directory=entry.kind==='directory',blocked=entry.kind==='blocked'||entry.kind==='other',label=directory?'dir':fileLabel(entry.name);return h('button',{'aria-expanded':directory?expanded:undefined,className:'dsh-wel-tree-row','data-selected':selected||undefined,disabled:blocked,onClick:directory?()=>onDirectory(entry):()=>onFile(entry),onContextMenu:e=>onContextMenu(e,entry),onKeyDown:e=>{if(e.key==='F2'){e.preventDefault();onRename(entry)}},style:{'--dsh-wel-depth':depth},title:`${entry.path}${entry.symlink?'（符号链接）':''}`,type:'button'},h('span',{className:'dsh-wel-chevron'},directory?(expanded?'▼':'▶'):''),h('span',{className:'dsh-wel-file-mark','data-kind':entry.kind,'data-group':colorGroupOf(entry)},label.slice(0,3)),h('span',{className:'dsh-wel-row-name'},entry.name),entry.symlink?h('span',{className:'dsh-wel-symlink'},'↗'):null)}
 const TreeStatus=({children,error})=>h('div',{className:'dsh-wel-tree-status','data-error':error||undefined},children)
-function TreeContextMenu({entry,menuRef,onCopyPath,x,y}){const left=Math.max(4,Math.min(x,window.innerWidth-CONTEXT_MENU_WIDTH-4)),top=Math.max(4,Math.min(y,window.innerHeight-CONTEXT_MENU_HEIGHT-4));return h('div',{'aria-label':entry.path,className:'dsh-wel-context-menu',ref:menuRef,role:'menu',style:{left,top}},h('button',{className:'dsh-wel-context-item',onClick:()=>onCopyPath(entry,false),role:'menuitem',title:'复制文件的完整绝对路径',type:'button'},'复制路径'),h('button',{className:'dsh-wel-context-item',onClick:()=>onCopyPath(entry,true),role:'menuitem',title:'复制相对工作区根目录的路径',type:'button'},'复制相对路径'))}
+function TreeContextMenu({entry,menuRef,onCopyPath,onReveal,x,y}){const left=Math.max(4,Math.min(x,window.innerWidth-CONTEXT_MENU_WIDTH-4)),top=Math.max(4,Math.min(y,window.innerHeight-CONTEXT_MENU_HEIGHT-4));return h('div',{'aria-label':entry.path,className:'dsh-wel-context-menu',ref:menuRef,role:'menu',style:{left,top}},h('button',{className:'dsh-wel-context-item',onClick:()=>onCopyPath(entry,false),role:'menuitem',title:'复制文件的完整绝对路径',type:'button'},'复制路径'),h('button',{className:'dsh-wel-context-item',onClick:()=>onCopyPath(entry,true),role:'menuitem',title:'复制相对工作区根目录的路径',type:'button'},'复制相对路径'),h('button',{className:'dsh-wel-context-item',onClick:()=>onReveal(entry),role:'menuitem',title:'在操作系统的文件管理器中打开此文件或文件夹',type:'button'},'在资源管理器中打开'))}
 function TabContextMenu({menuRef,onCloseOthers,onTogglePin,pinned,x,y}){const left=Math.max(4,Math.min(x,window.innerWidth-CONTEXT_MENU_WIDTH-4)),top=Math.max(4,Math.min(y,window.innerHeight-CONTEXT_MENU_HEIGHT-4));return h('div',{className:'dsh-wel-context-menu',ref:menuRef,role:'menu',style:{left,top}},h('button',{className:'dsh-wel-context-item',onClick:onTogglePin,role:'menuitem',title:pinned?'取消固定此标签页':'固定此标签页并移动到标签开头',type:'button'},pinned?'取消固定':'固定标签'),h('button',{className:'dsh-wel-context-item',onClick:onCloseOthers,role:'menuitem',title:'关闭除当前标签外的所有未固定标签页',type:'button'},'关闭其他标签页'))}
 function EntryDialog({dialog,draft,error,busy,blocked,composingRef,onCancel,onConfirm,onDraft}){if(!dialog)return null;const title=entryDialogTitle(dialog),action=entryDialogAction(dialog);return h('div',{className:'dsh-wel-dialog-backdrop',onMouseDown:e=>{if(e.target===e.currentTarget)onCancel()}},h('div',{'aria-modal':true,className:'dsh-wel-dialog',role:'dialog'},h('div',{className:'dsh-wel-dialog-header'},h('div',{className:'dsh-wel-dialog-title'},title),h('button',{'aria-label':'关闭',className:'dsh-wel-icon-button',disabled:busy,onClick:onCancel,title:'关闭',type:'button'},'×')),h('div',{className:'dsh-wel-dialog-body'},h('input',{'aria-label':'名称',autoFocus:true,className:'dsh-wel-dialog-input',disabled:busy,onChange:e=>onDraft(e.target.value),onCompositionEnd:()=>{composingRef.current=false},onCompositionStart:()=>{composingRef.current=true},onFocus:e=>e.target.select(),onKeyDown:e=>{if(e.key==='Escape'){e.preventDefault();onCancel()}else if(e.key==='Enter'&&!composingRef.current){e.preventDefault();onConfirm()}},value:draft}),error?h('div',{className:'dsh-wel-dialog-error',role:'alert'},error):null),h('div',{className:'dsh-wel-dialog-footer'},h('button',{className:'dsh-wel-text-button',disabled:busy,onClick:onCancel,type:'button'},'取消'),h('button',{className:'dsh-wel-text-button',disabled:blocked,onClick:onConfirm,type:'button'},busy?'处理中…':action))))}
 function EncodingMenu({menuRef,onOpen,onSave,canOpen,canSave,x,y}){const left=Math.max(4,Math.min(x,window.innerWidth-CONTEXT_MENU_WIDTH-4)),top=Math.max(4,Math.min(y,window.innerHeight-CONTEXT_MENU_HEIGHT-4));return h('div',{className:'dsh-wel-context-menu',ref:menuRef,role:'menu',style:{left,top}},h('button',{className:'dsh-wel-context-item',disabled:!canOpen,onClick:onOpen,role:'menuitem',title:canOpen?'用所选编码重新解码并展示此文件':'有未保存的更改，请先保存或取消后再切换编码打开',type:'button'},'以编码打开…'),h('button',{className:'dsh-wel-context-item',disabled:!canSave,onClick:onSave,role:'menuitem',title:canSave?'将当前文件内容用所选编码写回磁盘':'该文件当前不能编辑，无法另存为编码',type:'button'},'另存为编码…'))}
 function EncodingDialog({dialog,options,value,busy,onCancel,onPick,onConfirm}){if(dialog===undefined)return null;const title=dialog.mode==='open'?'以编码打开':'另存为编码',action=dialog.mode==='open'?'打开':'保存';return h('div',{className:'dsh-wel-dialog-backdrop',onMouseDown:e=>{if(e.target===e.currentTarget&&!busy)onCancel()}},h('div',{'aria-modal':true,className:'dsh-wel-dialog',role:'dialog'},h('div',{className:'dsh-wel-dialog-header'},h('div',{className:'dsh-wel-dialog-title'},title),h('button',{'aria-label':'关闭',className:'dsh-wel-icon-button',disabled:busy,onClick:onCancel,title:'关闭',type:'button'},'×')),h('div',{className:'dsh-wel-dialog-body'},h('label',{className:'dsh-wel-settings-label',htmlFor:'dsh-wel-encoding-select'},'文件编码'),h('select',{'aria-label':'文件编码',className:'dsh-wel-highlight-preset-select',disabled:busy,id:'dsh-wel-encoding-select',onChange:e=>onPick(e.target.value),value},options.map(enc=>h('option',{key:enc.id,value:enc.id},enc.label)))),h('div',{className:'dsh-wel-dialog-footer'},h('button',{className:'dsh-wel-text-button',disabled:busy,onClick:onCancel,type:'button'},'取消'),h('button',{className:'dsh-wel-text-button',disabled:busy||options.length===0,onClick:onConfirm,type:'button'},busy?'处理中…':action))))}
+function SessionRenameDialog({draft,busy,error,onCancel,onConfirm,onDraft}){return h('div',{className:'dsh-wel-dialog-backdrop',onMouseDown:e=>{if(e.target===e.currentTarget&&!busy)onCancel()}},h('div',{'aria-modal':true,className:'dsh-wel-dialog',role:'dialog'},h('div',{className:'dsh-wel-dialog-header'},h('div',{className:'dsh-wel-dialog-title'},'重命名当前会话'),h('button',{'aria-label':'关闭',className:'dsh-wel-icon-button',disabled:busy,onClick:onCancel,title:'关闭',type:'button'},'×')),h('div',{className:'dsh-wel-dialog-body'},h('input',{'aria-label':'会话名称',autoFocus:true,className:'dsh-wel-dialog-input',disabled:busy,onChange:e=>onDraft(e.target.value),onFocus:e=>e.target.select(),onKeyDown:e=>{if(e.key==='Escape'){e.preventDefault();onCancel()}else if(e.key==='Enter'){e.preventDefault();onConfirm()}},value:draft}),error?h('div',{className:'dsh-wel-dialog-error',role:'alert'},error):null),h('div',{className:'dsh-wel-dialog-footer'},h('button',{className:'dsh-wel-text-button',disabled:busy,onClick:onCancel,type:'button'},'取消'),h('button',{className:'dsh-wel-text-button',disabled:busy||draft.trim()==='',onClick:onConfirm,type:'button'},busy?'处理中…':'重命名'))))}
 
 function revealPosition(view, reveal) {
   const lineNumber = Math.min(Math.max(1, reveal.line), view.state.doc.lines)
@@ -1450,8 +1486,6 @@ function CodeEditor({ file, editing, wrap, onContext, onDirty, onSaveShortcut, o
           keymap.of([
             { key: 'Mod-s', preventDefault: true, run: () => { saveRef.current(); return true } },
             indentWithTab, ...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap,
-            { key: 'Mod-k j', run: unfoldAll },
-            ...Array.from({ length: 9 }, (_, index) => ({ key: `Mod-k ${index + 1}`, run: () => foldLevel(view, index + 1) })),
           ]),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) dirtyRef.current(update.state.sliceDoc())
@@ -1495,7 +1529,7 @@ function CodeEditor({ file, editing, wrap, onContext, onDirty, onSaveShortcut, o
       if (editorRef.current === view) editorRef.current = undefined
       view.destroy()
     }
-  }, [file.path, file.revision])
+  }, [file.path, file.encoding, file.revision])
 
   useEffect(() => {
     editorRef.current?.dispatch({
@@ -1518,11 +1552,66 @@ function CodeEditor({ file, editing, wrap, onContext, onDirty, onSaveShortcut, o
     revealPosition(view, reveal)
   }, [reveal])
 
+  // The Ctrl+K+J / Ctrl+K+<n> fold shortcuts are handled here at the window
+  // level (capture phase) so they work in every focus state: browsing keeps
+  // focus on the tree, toolbar, or fold gutter, and even when the editor
+  // content is focused the keymap path proved unreliable. The editor keymap
+  // deliberately does not bind these keys — one handling path avoids folding
+  // twice. Keys are consumed (preventDefault + stopPropagation) only for the
+  // captured Ctrl+K prefix and its completion J / 1..9.
+  useEffect(() => {
+    let armed = false
+    let timer
+    const cancel = () => { armed = false; clearTimeout(timer) }
+    const onKeyDown = (event) => {
+      const view = editorRef.current
+      if (view === undefined) return
+      const target = event.target
+      // Let text fields outside the editor (chat, rename, search, dialogs) keep
+      // their keys; the editor's own contenteditable is inside host.
+      const insideEditor = host.current !== null && target instanceof Node && host.current.contains(target)
+      if (!insideEditor && target instanceof HTMLElement && (target.isContentEditable || target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT')) {
+        cancel()
+        return
+      }
+      const key = String(event.key).toLowerCase()
+      const isCtrlK = key === 'k' && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey
+      if (isCtrlK) {
+        // (Re-)arm the prefix; a repeated Ctrl+K keeps the sequence alive.
+        event.preventDefault()
+        event.stopPropagation()
+        armed = true
+        clearTimeout(timer)
+        timer = setTimeout(cancel, 1000)
+        return
+      }
+      if (!armed) return
+      cancel()
+      if (key === 'j') {
+        event.preventDefault()
+        event.stopPropagation()
+        unfoldAll(view)
+        return
+      }
+      if (key.length === 1 && key >= '1' && key <= '9') {
+        event.preventDefault()
+        event.stopPropagation()
+        foldLevel(view, Number(key))
+        return
+      }
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true)
+      cancel()
+    }
+  }, [])
+
   return h('div', { className: 'dsh-wel-editor-host', 'data-highlight-preset': highlightPreset ?? HIGHLIGHT_PRESET_DEFAULT, ref: host })
 }
 
 function WorkspaceExplorer({
-  workspace, treePortalTarget, sessionTitle, publishEditorContext, listDirectory, readFile, saveFile, createEntry, renameEntry, storedDraft, storedPreviewSession, persistDraft, persistPreviewSession, clearDraft, settingsStore,
+  workspace, treePortalTarget, sessionTitle, sessionId, renameSession, publishEditorContext, listDirectory, readFile, saveFile, createEntry, renameEntry, storedDraft, storedPreviewSession, persistDraft, persistPreviewSession, clearDraft, settingsStore,
 }) {
   const settings = useSyncExternalStore(settingsStore.subscribe, settingsStore.getSnapshot)
   const initialPreviewSession = previewSessionWithDraft(storedPreviewSession, storedDraft)
@@ -1554,6 +1643,11 @@ function WorkspaceExplorer({
   const [entryError, setEntryError] = useState()
   const [contextMenu, setContextMenu] = useState()
   const [tabContextMenu, setTabContextMenu] = useState()
+  const [titleContextMenu, setTitleContextMenu] = useState()
+  const [sessionRenameOpen, setSessionRenameOpen] = useState(false)
+  const [sessionRenameDraft, setSessionRenameDraft] = useState('')
+  const [sessionRenameBusy, setSessionRenameBusy] = useState(false)
+  const [sessionRenameError, setSessionRenameError] = useState()
   const [pinScrollToken, setPinScrollToken] = useState(0)
   const tabScrollPathRef = useRef(null)
   const [copyNotice, setCopyNotice] = useState()
@@ -1566,6 +1660,7 @@ function WorkspaceExplorer({
   const searchRevealToken = useRef(0)
   const menuRef = useRef(null)
   const tabMenuRef = useRef(null)
+  const titleMenuRef = useRef(null)
   const encodingMenuRef = useRef(null)
   const requestedEncodingRef = useRef()
   const previewTabsRef = useRef(null)
@@ -1577,6 +1672,7 @@ function WorkspaceExplorer({
   const editorRef = useRef()
   const composingRef = useRef(false)
   const baseText = useRef('')
+  const diskBaseRef = useRef('')
   const mounted = useRef(true)
   const latestDraft = useRef(undefined)
   const restoredDraft = useRef(storedDraft)
@@ -1650,6 +1746,10 @@ function WorkspaceExplorer({
     publishEditorContext({
       workspaceId: String(workspace.workspaceId),
       path: activeTab.path,
+      // The editor decodes the file with preview.encoding; carrying it lets the
+      // server verify a clean selection against the same decode (not a hard
+      // UTF-8 assumption).
+      encoding: preview.encoding,
       dirty: text !== baseText.current || preview.revision === undefined,
       revision: preview.revision ?? undefined,
       selection,
@@ -1890,6 +1990,10 @@ function WorkspaceExplorer({
           }
         : undefined)
     const effectiveEncoding = requestedEncodingRef.current ?? tab?.encoding ?? 'utf-8'
+    // Consume a pending encoding-open request immediately: clearing here keeps
+    // an aborted re-read (file switch / tab close mid-flight) from leaking the
+    // stale encoding into the next file read.
+    requestedEncodingRef.current = undefined
     const selection = tab === undefined ? { kind: 'file', name: activePath.slice(activePath.lastIndexOf('/') + 1), path: activePath } : entryFromPreviewTab(tab)
     setSelected(selection)
     setEditing(Boolean(tab?.editing))
@@ -1922,6 +2026,10 @@ function WorkspaceExplorer({
       const restoredStatus = canRestore && stored.revision !== null && stored.revision !== undefined && result.revision !== stored.revision
         ? { error: true, text: '磁盘文件已在草稿保存后更改。草稿已恢复，保存时将检查冲突。' }
         : { text: '已恢复此工作区中未保存的草稿。' }
+      // The disk content (as last read) stays separate from the editing
+      // baseline: cancel restores the disk truth even when a draft restore
+      // happened with a stale base.
+      diskBaseRef.current = result.content
       baseText.current = canRestore ? stored.baseText : result.content
       setDraft(content)
       setPreview(ready)
@@ -1961,7 +2069,10 @@ function WorkspaceExplorer({
       }
     })
     return () => controller.abort()
-  }, [activePath, clearDraft, publishEditorContext, readFile, reloadToken, storedDraft?.content, storedDraft?.path, updateTab, workspace.workspaceId])
+    // The workspace draft arrives with the first render (the layout store is
+    // synchronous), never late, so it must not be a dependency: the restore
+    // path clears the draft, and that change must not re-read the file.
+  }, [activePath, clearDraft, publishEditorContext, readFile, reloadToken, updateTab, workspace.workspaceId])
 
   const save = useCallback(async (encodingOverride) => {
     if (preview.state !== 'ready' || saving || activeTab === undefined) return false
@@ -1990,6 +2101,7 @@ function WorkspaceExplorer({
       updateTab(path, { baseText: text, bom: savedBom, dirty: false, draft: text, editing: false, encoding: savedEncoding, lineEnding: preview.lineEnding ?? 'none', revision: result.revision ?? preview.revision ?? null, saving: false, size, status: savedStatus })
       if (activePathRef.current === path) {
         baseText.current = text
+        diskBaseRef.current = text
         setDraft(text)
         setDirty(false)
         setEditing(false)
@@ -2020,29 +2132,39 @@ function WorkspaceExplorer({
 
   const cancel = useCallback(() => {
     if (preview.state !== 'ready' || saving || activeTab === undefined) return
+    // Restore the last-read disk content, not the (possibly stale) editing
+    // baseline: a draft restored after the disk changed must cancel back to
+    // the current on-disk truth.
     const state = editorRef.current?.state
+    const restoredText = diskBaseRef.current
     editorRef.current?.dispatch({
-      changes: { from: 0, to: state?.doc.length ?? 0, insert: baseText.current },
+      changes: { from: 0, to: state?.doc.length ?? 0, insert: restoredText },
     })
-    setDraft(baseText.current)
+    baseText.current = restoredText
+    setDraft(restoredText)
     setDirty(false)
     setEditing(false)
     latestDraft.current = undefined
     clearDraft()
     const nextStatus = { text: '已取消编辑，内容已恢复。' }
     setStatus(nextStatus)
-    updateTab(activeTab.path, { dirty: false, draft: baseText.current, editing: false, status: nextStatus })
+    updateTab(activeTab.path, { dirty: false, draft: restoredText, editing: false, status: nextStatus })
   }, [activeTab, clearDraft, preview.state, saving, updateTab])
   const refresh=useCallback(()=>{if(hasDirtyTabs){setStatus({error:true,text:'存在未保存的更改，已阻止刷新文件树。请先保存或取消编辑。'});return}abortDirectoryRequests();setEntryDialog(undefined);setEntryDraft('');setEntryError(undefined);composingRef.current=false;setDirectories(new Map());setExpanded(new Set(['']));setStatus(undefined);void loadDirectory('')},[abortDirectoryRequests,hasDirtyTabs,loadDirectory])
   const toggleDirectory=useCallback(entry=>{const path=entry.path;const opening=!expanded.has(path);setExpanded(cur=>{const next=new Set(cur);opening?next.add(path):next.delete(path);return next});if(opening){if(directories.get(path)?.state!=='ready')void loadDirectory(path);chooseDirectory(entry)}else setSelected(entry)},[chooseDirectory,directories,expanded,loadDirectory])
   const openContextMenu=useCallback((event,entry)=>{event.preventDefault();setSelected(entry);setContextMenu({entry,x:event.clientX,y:event.clientY})},[])
   const copyEntryPath=useCallback((entry,relative)=>{const value=relative?entry.path:joinAbsolutePath(workspace.path,entry.path);void copyText(value).then(ok=>{if(!mounted.current)return;setContextMenu(undefined);setCopyNotice(ok?(relative?'已复制相对路径。':'已复制完整路径。'):'复制失败。');clearTimeout(copyNoticeTimer.current);copyNoticeTimer.current=setTimeout(()=>{if(mounted.current)setCopyNotice(undefined)},1600)})},[workspace.path])
+  const openInExplorer=useCallback((entry)=>{setContextMenu(undefined);const controller=new AbortController();revealInExplorer(workspace.workspaceId,entry.path,controller.signal).then(()=>{if(!mounted.current)return;setCopyNotice('已在资源管理器中打开。');clearTimeout(copyNoticeTimer.current);copyNoticeTimer.current=setTimeout(()=>{if(mounted.current)setCopyNotice(undefined)},1600)}).catch(error=>{if(!mounted.current||error?.name==='AbortError')return;setCopyNotice(`打开失败：${error instanceof Error?error.message:String(error)}`);clearTimeout(copyNoticeTimer.current);copyNoticeTimer.current=setTimeout(()=>{if(mounted.current)setCopyNotice(undefined)},3000)})},[workspace.workspaceId])
+  const openSessionRename=useCallback(()=>{setTitleContextMenu(undefined);setSessionRenameDraft(sessionTitle ?? '');setSessionRenameError(undefined);setSessionRenameOpen(true)},[sessionTitle])
+  const closeSessionRename=useCallback(()=>{if(sessionRenameBusy)return;setSessionRenameOpen(false);setSessionRenameDraft('');setSessionRenameError(undefined)},[sessionRenameBusy])
+  const confirmSessionRename=useCallback(()=>{if(sessionRenameBusy||sessionId===undefined)return;const trimmed=sessionRenameDraft.trim();if(trimmed==='')return;setSessionRenameBusy(true);setSessionRenameError(undefined);renameSession(String(sessionId),trimmed).then(()=>{if(!mounted.current)return;setSessionRenameBusy(false);setSessionRenameOpen(false);setSessionRenameDraft('')}).catch(error=>{if(!mounted.current)return;setSessionRenameBusy(false);setSessionRenameError(error instanceof Error?error.message:String(error))})},[renameSession,sessionId,sessionRenameBusy,sessionRenameDraft])
   const runSearch=useCallback(async(query)=>{searchController.current?.abort();if(query.trim()===''){setSearchState({state:'idle'});return}const controller=new AbortController();searchController.current=controller;setSearchState({state:'searching'});try{const result=await requestSearch(workspace.workspaceId,query,searchCaseSensitive,controller.signal);if(searchController.current===controller)setSearchState({state:'done',result})}catch(error){if(error?.name==='AbortError')return;if(searchController.current===controller)setSearchState({state:'error',message:error instanceof Error?error.message:String(error)})}},[searchCaseSensitive,workspace.workspaceId])
   const closeSearch=useCallback(()=>{searchController.current?.abort();searchController.current=undefined;setSearchOpen(false)},[])
   const openSearchMatch=useCallback((file,match)=>{const entry={kind:'file',name:file.name,path:file.path,symlink:false};chooseFile(entry);searchRevealToken.current+=1;setSearchReveal({endColumn:match.endColumn,column:match.startColumn,line:match.line,path:file.path,token:searchRevealToken.current})},[chooseFile])
   useEffect(()=>{if(!searchOpen)return undefined;const timer=setTimeout(()=>{void runSearch(searchQuery)},300);return()=>clearTimeout(timer)},[runSearch,searchOpen,searchQuery])
   useEffect(()=>{if(contextMenu===undefined)return undefined;const inside=event=>{const node=menuRef.current;return node!==null&&event.target instanceof Node&&node.contains(event.target)};const close=()=>setContextMenu(undefined);const onPointerDown=event=>{if(!inside(event))close()};const onContextMenu=event=>{if(!inside(event))close()};const onKeyDown=event=>{if(event.key==='Escape')close()};window.addEventListener('pointerdown',onPointerDown);window.addEventListener('contextmenu',onContextMenu,true);window.addEventListener('keydown',onKeyDown);window.addEventListener('resize',close);window.addEventListener('scroll',close,true);return()=>{window.removeEventListener('pointerdown',onPointerDown);window.removeEventListener('contextmenu',onContextMenu,true);window.removeEventListener('keydown',onKeyDown);window.removeEventListener('resize',close);window.removeEventListener('scroll',close,true)}},[contextMenu])
   useEffect(()=>{if(tabContextMenu===undefined)return undefined;const inside=event=>{const node=tabMenuRef.current;return node!==null&&event.target instanceof Node&&node.contains(event.target)};const close=()=>setTabContextMenu(undefined);const onPointerDown=event=>{if(!inside(event))close()};const onContextMenu=event=>{if(!inside(event))close()};const onKeyDown=event=>{if(event.key==='Escape')close()};window.addEventListener('pointerdown',onPointerDown);window.addEventListener('contextmenu',onContextMenu,true);window.addEventListener('keydown',onKeyDown);window.addEventListener('resize',close);window.addEventListener('scroll',close,true);return()=>{window.removeEventListener('pointerdown',onPointerDown);window.removeEventListener('contextmenu',onContextMenu,true);window.removeEventListener('keydown',onKeyDown);window.removeEventListener('resize',close);window.removeEventListener('scroll',close,true)}},[tabContextMenu])
+  useEffect(()=>{if(titleContextMenu===undefined)return undefined;const inside=event=>{const node=titleMenuRef.current;return node!==null&&event.target instanceof Node&&node.contains(event.target)};const close=()=>setTitleContextMenu(undefined);const onPointerDown=event=>{if(!inside(event))close()};const onContextMenu=event=>{if(!inside(event))close()};const onKeyDown=event=>{if(event.key==='Escape')close()};window.addEventListener('pointerdown',onPointerDown);window.addEventListener('contextmenu',onContextMenu,true);window.addEventListener('keydown',onKeyDown);window.addEventListener('resize',close);window.addEventListener('scroll',close,true);return()=>{window.removeEventListener('pointerdown',onPointerDown);window.removeEventListener('contextmenu',onContextMenu,true);window.removeEventListener('keydown',onKeyDown);window.removeEventListener('resize',close);window.removeEventListener('scroll',close,true)}},[titleContextMenu])
   const openWithEncoding = useCallback((encodingId) => {
     if (dirty) {
       setStatus({ error: true, text: '有未保存的更改，请先保存或取消后再切换编码打开。' })
@@ -2259,7 +2381,7 @@ function WorkspaceExplorer({
       status ? h('div', { className: 'dsh-wel-status', 'data-error': status.error || undefined }, status.text) : null,
       h('div', { className: 'dsh-wel-preview-body', onClick: () => { if (activePathRef.current !== null) scrollTabIntoView(activePathRef.current) } },
         h(CodeEditor, {
-          key: `${preview.path}:${String(preview.revision ?? '')}`,
+          key: `${preview.path}:${preview.encoding}:${String(preview.revision ?? '')}`,
           editorRef,
           editing,
           file: preview,
@@ -2437,11 +2559,13 @@ function WorkspaceExplorer({
             ],
             action: refresh,
             actionLabel: '刷新文件树',
+            onContextMenu: event => { event.preventDefault(); setTitleContextMenu({ x: event.clientX, y: event.clientY }) },
             subtitle: workspace.path,
             title: sessionTitle ?? '工作区文件',
           }),
           h('div', { className: 'dsh-wel-tree-scroll' }, renderDirectory('', 0)),
-          contextMenu ? h(TreeContextMenu, { entry: contextMenu.entry, menuRef, onCopyPath: copyEntryPath, x: contextMenu.x, y: contextMenu.y }) : null,
+          contextMenu ? h(TreeContextMenu, { entry: contextMenu.entry, menuRef, onCopyPath: copyEntryPath, onReveal: openInExplorer, x: contextMenu.x, y: contextMenu.y }) : null,
+          titleContextMenu ? h('div', { className: 'dsh-wel-context-menu', ref: titleMenuRef, role: 'menu', style: { left: Math.max(4, Math.min(titleContextMenu.x, window.innerWidth - CONTEXT_MENU_WIDTH - 4)), top: Math.max(4, Math.min(titleContextMenu.y, window.innerHeight - 52)) } }, h('button', { className: 'dsh-wel-context-item', onClick: openSessionRename, role: 'menuitem', title: '重命名当前会话', type: 'button' }, '重命名当前会话')) : null,
           copyNotice ? h('div', { className: 'dsh-wel-copy-notice', role: 'status' }, copyNotice) : null,
         ),
   )
@@ -2459,6 +2583,14 @@ function WorkspaceExplorer({
     }) : null,
     encodingMenu ? h(EncodingMenu, { canOpen: !dirty, canSave: preview.state === 'ready' && preview.editable !== false && !preview.readOnlyReason, menuRef: encodingMenuRef, onOpen: () => openEncodingDialog('open'), onSave: () => openEncodingDialog('save'), x: encodingMenu.x, y: encodingMenu.y }) : null,
     encodingDialog ? h(EncodingDialog, { busy: encodingDialog.mode === 'save' && saving, dialog: encodingDialog, onCancel: closeEncodingDialog, onConfirm: confirmEncodingDialog, onPick: setEncodingPick, options: encodingOptions, value: encodingPick }) : null,
+    sessionRenameOpen ? h(SessionRenameDialog, {
+      busy: sessionRenameBusy,
+      draft: sessionRenameDraft,
+      error: sessionRenameError,
+      onCancel: closeSessionRename,
+      onConfirm: confirmSessionRename,
+      onDraft: value => { setSessionRenameDraft(value); setSessionRenameError(undefined) },
+    }) : null,
     treePortalTarget ? createPortal(treeSection, treePortalTarget) : null,
     h('section', { className: 'dsh-wel-preview' },
       tabs.length ? h('div', { ref: previewTabsRef, className: 'dsh-wel-preview-tabs', role: 'tablist', 'aria-label': '文件预览标签', onDragLeave: handleTabsDragLeave, onDragOver: updateDropIndex, onDrop: handleTabsDrop }, previewTabNodes) : null,
@@ -2653,6 +2785,8 @@ function AppFrame(props) {
   for (const { group } of FILE_COLOR_GROUPS) fileColorVars[`--dsh-wel-file-${group}`] = fileColorOf(settings, group)
   const currentSession = props.useSessions(state => state.current)
   const sessionIds = props.useSessions(state => state.ids)
+  // The session rename dialog targets the current session id.
+  const sessionId = currentSession
   // The workspace-files panel header names the current session (its durable
   // title) instead of a fixed label, so the browsing panel reads as belonging
   // to the session being worked on; fall back when no session is selected.
@@ -2683,7 +2817,7 @@ function AppFrame(props) {
       if (value === undefined) continue
       const fat = (value?.tabs ?? []).some(tab => tab?.dirty === false && typeof tab?.draft === 'string' && tab.draft !== '')
       if (!fat) continue
-      props.previewSessionsStore.actions.rememberPreviewSession(key, serializePreviewSession(value.activePath, value.tabs))
+      props.previewSessionsStore.actions.rememberPreviewSession(key, serializePreviewSession(value.activePath, value.tabs, value.expanded ?? []))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -2815,7 +2949,7 @@ function AppFrame(props) {
   const preview = filesActive || panes.explorerOpen ? clamp(panes.preview ?? PREVIEW_DEFAULT, PREVIEW_MIN, previewMax) : 0
   const previewBoundary = sidebar + preview
   const treePortalTarget = sidebarChrome?.files ?? null
-  return h('div',{ref:viewportRef,className:'dsh-wel-viewport'},h('main',{className:'dsh-wel-frame','data-explorer-closed':!panes.explorerOpen&&!filesActive||undefined,'data-sidebar-collapsed':collapsed||undefined,'data-sidebar-files':filesActive||undefined,'data-resizing':resizing||undefined,style:{'--dsh-wel-preview':`${preview}px`,'--dsh-wel-sidebar':`${sidebar}px`,'--dsh-wel-row-height':`${settings.rowHeight ?? ROW_HEIGHT_DEFAULT}px`,'--dsh-wel-chat-font-scale':String(chatFontScale),...fileColorVars}},h('aside',{className:'dsh-wel-sidebar',ref:asideRef},props.renderSlot('sidebar',{collapsed,width:sidebar}),sidebarChrome?.top?createPortal(h(SidebarTopActions,{collapsed,view,width:sidebar,onSelectSessions:()=>{props.actions.setView('sessions')},onSelectFiles:()=>{if(collapsed)props.toggleSidebar();props.actions.setView('files')}}),sidebarChrome.top):null),workspace?h(WorkspaceExplorer,{key:previewSessionKey ?? workspace.workspaceId,clearDraft:clearWorkspaceDraft,createEntry:props.createEntry,listDirectory:props.listDirectory,persistDraft:persistWorkspaceDraft,persistPreviewSession,publishEditorContext,readFile:props.readFile,renameEntry:props.renameEntry,saveFile:props.saveFile,settingsStore:props.settingsStore,storedDraft:panels.drafts[String(workspace.workspaceId)],storedPreviewSession,sessionTitle,treePortalTarget,workspace}):h(EmptyWorkspaceExplorer,{sessionTitle,treePortalTarget}),h('section',{className:'dsh-wel-chat'},props.renderSlot('conversation',{})),!collapsed?h(ResizeHandle,{label:'调整会话面板宽度',left:sidebar,max:sidebarMax,min:SIDEBAR_MIN,onDragging:setResizing,onResize:width=>props.actions.setSidebar(width,sidebarMax),value:sidebar}):null,(panes.explorerOpen||filesActive)?h(ResizeHandle,{label:'调整文件预览宽度',left:previewBoundary,max:previewMax,min:PREVIEW_MIN,onDragging:setResizing,onResize:width=>props.explorerPaneStore.actions.setPreview(width,previewMax),value:preview}):null,h('aside',{className:'dsh-wel-details','data-closed':!panels.detailsOpen||!detailsCapable||undefined},props.renderSlot('details',{})),h('div',{className:'dsh-wel-overlay','data-shell-overlay':true},props.renderSlot('shell.overlay',{}))))}
+  return h('div',{ref:viewportRef,className:'dsh-wel-viewport'},h('main',{className:'dsh-wel-frame','data-explorer-closed':!panes.explorerOpen&&!filesActive||undefined,'data-sidebar-collapsed':collapsed||undefined,'data-sidebar-files':filesActive||undefined,'data-resizing':resizing||undefined,style:{'--dsh-wel-preview':`${preview}px`,'--dsh-wel-sidebar':`${sidebar}px`,'--dsh-wel-row-height':`${settings.rowHeight ?? ROW_HEIGHT_DEFAULT}px`,'--dsh-wel-chat-font-scale':String(chatFontScale),...fileColorVars}},h('aside',{className:'dsh-wel-sidebar',ref:asideRef},props.renderSlot('sidebar',{collapsed,width:sidebar}),sidebarChrome?.top?createPortal(h(SidebarTopActions,{collapsed,view,width:sidebar,onSelectSessions:()=>{props.actions.setView('sessions')},onSelectFiles:()=>{if(collapsed)props.toggleSidebar();props.actions.setView('files')}}),sidebarChrome.top):null),workspace?h(WorkspaceExplorer,{key:previewSessionKey ?? workspace.workspaceId,clearDraft:clearWorkspaceDraft,createEntry:props.createEntry,listDirectory:props.listDirectory,persistDraft:persistWorkspaceDraft,persistPreviewSession,publishEditorContext,readFile:props.readFile,renameEntry:props.renameEntry,saveFile:props.saveFile,settingsStore:props.settingsStore,storedDraft:panels.drafts[String(workspace.workspaceId)],storedPreviewSession,sessionTitle,sessionId,renameSession:props.renameSession,treePortalTarget,workspace}):h(EmptyWorkspaceExplorer,{sessionTitle,treePortalTarget}),h('section',{className:'dsh-wel-chat'},props.renderSlot('conversation',{})),!collapsed?h(ResizeHandle,{label:'调整会话面板宽度',left:sidebar,max:sidebarMax,min:SIDEBAR_MIN,onDragging:setResizing,onResize:width=>props.actions.setSidebar(width,sidebarMax),value:sidebar}):null,(panes.explorerOpen||filesActive)?h(ResizeHandle,{label:'调整文件预览宽度',left:previewBoundary,max:previewMax,min:PREVIEW_MIN,onDragging:setResizing,onResize:width=>props.explorerPaneStore.actions.setPreview(width,previewMax),value:preview}):null,h('aside',{className:'dsh-wel-details','data-closed':!panels.detailsOpen||!detailsCapable||undefined},props.renderSlot('details',{})),h('div',{className:'dsh-wel-overlay','data-shell-overlay':true},props.renderSlot('shell.overlay',{}))))}
 
 export const inject = ['slots', 'theme', 'sessions']
 export function apply(ctx) {
@@ -2866,6 +3000,12 @@ export function apply(ctx) {
           saveFile,
           settingsStore,
           toggleSidebar: () => { layout.toggleSidebar() },
+          renameSession: async (sessionId, title) => {
+            const session = ctx.sessions.binding(String(sessionId))?.session
+            if (session === undefined) throw new Error(`unknown session "${sessionId}"`)
+            const result = await session.rename(title)
+            if (!result.ok) throw new Error(result.error.message)
+          },
         }
       },
     }, AppFrame)

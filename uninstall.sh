@@ -50,6 +50,7 @@ fi
 
 echo
 echo "Uninstalled. Restart the existing DeepSeek Harness Web process, then refresh the page."
-echo "The shipped ui-layout will be restored after restart. No tests were run."echo
+echo "The shipped ui-layout will be restored after restart. No tests were run."
+echo
 
 read -r -p "Press Enter to exit..." || true

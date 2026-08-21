@@ -1,9 +1,14 @@
 import { Buffer } from 'node:buffer'
+import { execFile, spawn } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { lstat, mkdir, open, readdir, realpath, rename, stat, unlink } from 'node:fs/promises'
+import { release as osRelease } from 'node:os'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { promisify } from 'node:util'
 import z from '@deepseek-ai/schemastery'
 import iconv from 'iconv-lite'
+
+const execFileAsync = promisify(execFile)
 
 /** Stable Cordis plugin name. */
 export const name = 'workspace-explorer-layout'
@@ -150,6 +155,82 @@ async function resolveWorkspacePath(root, relativePath) {
   }
   if (!isInside(root, target)) throw new HttpError(403, 'path-outside-workspace', '拒绝访问工作区之外的路径')
   return target
+}
+
+/** Whether the Linux host is Windows Subsystem for Linux (WSL). */
+function isWslHost() {
+  const env = process.env
+  return (env.WSL_DISTRO_NAME !== undefined && env.WSL_DISTRO_NAME !== '')
+    || (env.WSL_INTEROP !== undefined && env.WSL_INTEROP !== '')
+    || osRelease().toLowerCase().includes('microsoft')
+}
+
+/** Translate a Linux path to the Windows path WSL exposes it under. */
+async function translateToWindowsPath(path) {
+  let stdout
+  try {
+    ({ stdout } = await execFileAsync('wslpath', ['-w', path]))
+  } catch {
+    // wslpath missing or failing is a host configuration problem, not a
+    // missing path; report it as a clear reveal failure instead of letting
+    // the raw ENOENT surface as a misleading path-not-found.
+    throw new HttpError(500, 'wsl-translate-failed', '无法将路径转换为 Windows 路径')
+  }
+  const translated = stdout.replace(/[\r\n]+$/, '')
+  if (translated === '') throw new HttpError(500, 'wsl-translate-failed', '无法将路径转换为 Windows 路径')
+  return translated
+}
+
+/**
+ * Resolve the native "reveal in file manager" command for one path.
+ * Directories open in place; files reveal inside their containing folder.
+ * Returns undefined on platforms with no desktop file manager.
+ */
+async function revealCommandFor(target, directory, platform = process.platform) {
+  if (platform === 'win32') {
+    return { file: 'explorer.exe', args: directory ? [target] : [`/select,${target}`] }
+  }
+  if (platform === 'darwin') {
+    return { file: 'open', args: ['-R', target] }
+  }
+  if (platform === 'linux') {
+    if (isWslHost()) {
+      const windowsPath = await translateToWindowsPath(target)
+      return { file: 'explorer.exe', args: directory ? [windowsPath] : [`/select,${windowsPath}`] }
+    }
+    return { file: 'xdg-open', args: [directory ? target : dirname(target)] }
+  }
+  return undefined
+}
+
+/** Spawn a detached native reveal command and wait for it to actually launch. */
+function launchNativeReveal(command) {
+  return new Promise((resolveLaunch, reject) => {
+    const child = spawn(command.file, command.args, { detached: true, stdio: 'ignore' })
+    child.once('error', reject)
+    child.once('spawn', () => {
+      child.unref()
+      resolveLaunch()
+    })
+  })
+}
+
+/** Open one workspace-confined path in the operating system's file manager. */
+async function revealInExplorer(workspace, relativePath) {
+  const root = await realpath(workspace.path)
+  const target = await resolveWorkspacePath(root, relativePath)
+  const targetStat = await stat(target)
+  try {
+    const command = await revealCommandFor(target, targetStat.isDirectory())
+    if (command === undefined) {
+      throw new HttpError(501, 'unsupported-platform', '当前系统没有可用的桌面文件管理器')
+    }
+    await launchNativeReveal(command)
+  } catch (error) {
+    if (error instanceof HttpError) throw error
+    throw new HttpError(500, 'reveal-failed', '无法在资源管理器中打开该路径')
+  }
+  return { workspaceId: String(workspace.id), path: relativePath, opened: true }
 }
 
 function entryPath(parent, name) {
@@ -868,6 +949,12 @@ function validatePromptContextPayload(value, config) {
   if (!value.dirty && revision === undefined) {
     throw new HttpError(409, 'context-revision-required', '未修改的选区必须携带文件修订版本')
   }
+  // The decode encoding the client editor used, whitelisted against the
+  // supported encodings; absent payloads default to UTF-8 (the historical
+  // behaviour). Unknown ids throw via encodingById.
+  const encoding = value.encoding === undefined || value.encoding === null
+    ? 'utf-8'
+    : encodingById(String(value.encoding)).id
   const selection = {
     from: requiredInteger(value.selection.from, 'selection.from', 0),
     to: requiredInteger(value.selection.to, 'selection.to', 1),
@@ -890,6 +977,7 @@ function validatePromptContextPayload(value, config) {
     workspaceId,
     path,
     mode: 'selection',
+    encoding,
     dirty: value.dirty,
     ...(revision === undefined ? {} : { revision }),
     selection,
@@ -971,10 +1059,19 @@ async function verifyCleanSelection(file, context, maximum) {
   if (revisionFor(bytes) !== context.revision) {
     throw new HttpError(409, 'context-revision-conflict', '文件已变化，请重新选择上下文后再发送')
   }
-  if (containsNul(bytes)) throw new HttpError(415, 'binary-file', '上下文文件不是 UTF-8 文本')
-  const content = decodeUtf8(bytes, false)
-  if (content === undefined) throw new HttpError(415, 'binary-file', '上下文文件不是 UTF-8 文本')
-  const metadata = textMetadata(bytes, content)
+  const encodingId = context.encoding ?? 'utf-8'
+  const isUtf16 = encodingId === 'utf-16le' || encodingId === 'utf-16be'
+  // UTF-16 text legitimately carries 0x00 bytes; the NUL sniff applies to the
+  // other encodings only.
+  if (!isUtf16 && containsNul(bytes)) throw new HttpError(415, 'binary-file', '上下文文件不是文本')
+  // Decode with the same encoding the client editor displayed, not a hard
+  // UTF-8 assumption, so the recomputed selection matches the editor text.
+  const content = decodeBytes(bytes, encodingId, false)
+  if (content === undefined) {
+    const label = encodingById(encodingId).label
+    throw new HttpError(415, 'invalid-encoding', `上下文文件不是有效的 ${label} 编码文本`)
+  }
+  const metadata = textMetadata(bytes, content, encodingId)
   const logical = normalizeNewlines(content)
   const { selection } = context
   if (selection.to > logical.length) {
@@ -1061,6 +1158,7 @@ async function handleRequest(ctx, config, trustedHosts, writeQueues, req, res) {
     const fileEndpoint = url.pathname === `${API_PREFIX}/file`
     const treeEndpoint = url.pathname === `${API_PREFIX}/tree`
     const searchEndpoint = url.pathname === `${API_PREFIX}/search`
+    const revealEndpoint = url.pathname === `${API_PREFIX}/reveal`
     const allowed = contextEndpoint
       ? 'POST'
       : encodingsEndpoint
@@ -1073,12 +1171,14 @@ async function handleRequest(ctx, config, trustedHosts, writeQueues, req, res) {
               ? 'GET, HEAD'
               : searchEndpoint
                 ? 'GET, HEAD'
-                : undefined
+                : revealEndpoint
+                  ? 'POST'
+                  : undefined
     if (allowed !== undefined && !allowed.split(', ').includes(req.method ?? '')) {
       sendError(req, res, 405, 'method-not-allowed', `该接口只允许 ${allowed} 请求`, { allow: allowed })
       return
     }
-    if (!contextEndpoint && !encodingsEndpoint && !entryEndpoint && !fileEndpoint && !treeEndpoint && !searchEndpoint) {
+    if (!contextEndpoint && !encodingsEndpoint && !entryEndpoint && !fileEndpoint && !treeEndpoint && !searchEndpoint && !revealEndpoint) {
       sendError(req, res, 404, 'endpoint-not-found', '接口不存在')
       return
     }
@@ -1107,6 +1207,10 @@ async function handleRequest(ctx, config, trustedHosts, writeQueues, req, res) {
     }
     const relativePath = normalizeRelativePath(url.searchParams.get('path') ?? '')
     const encodingId = url.searchParams.get('encoding') ?? 'utf-8'
+    if (revealEndpoint) {
+      sendJson(req, res, 200, await revealInExplorer(workspace, relativePath))
+      return
+    }
     if (entryEndpoint && req.method === 'POST') {
       sendJson(req, res, 200, await createEntry(workspace, relativePath, config, writeQueues, req))
     } else if (entryEndpoint) {

@@ -46,6 +46,7 @@ fi
 
 echo
 echo "Installed. Restart the existing DeepSeek Harness Web process, then refresh the page."
-echo "The script did not start another server and did not run tests."echo
+echo "The script did not start another server and did not run tests."
+echo
 
 read -r -p "Press Enter to exit..." || true
