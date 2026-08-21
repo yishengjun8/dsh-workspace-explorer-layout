@@ -20,6 +20,9 @@ export const inject = ['webServer', 'workspaceRegistry', 'webRuntime', 'sessions
 export const Config = z.object({
   maxEntriesPerDirectory: z.natural().min(1).max(10_000).default(1000),
   maxPreviewBytes: z.natural().min(1024).max(10 * 1024 * 1024).default(1024 * 1024),
+  // Cap on bytes the browser may upload when a user drags a non-workspace file
+  // into the preview pane. The preview display still truncates to maxPreviewBytes.
+  maxExternalUploadBytes: z.natural().min(1024).max(256 * 1024 * 1024).default(8 * 1024 * 1024),
   maxContextBytes: z.natural().min(1024).max(1024 * 1024).default(64 * 1024),
   maxPromptContextBytes: z.natural().min(4096).max(2 * 1024 * 1024).default(68 * 1024),
   maxContextSourceBytes: z.natural().min(1024).max(100 * 1024 * 1024).default(10 * 1024 * 1024),
@@ -609,6 +612,52 @@ async function readPreview(workspace, relativePath, config, encodingId = 'utf-8'
   return result
 }
 
+/**
+ * Preview a non-workspace file the browser uploaded after a drag-and-drop into
+ * the preview pane. Browsers never expose the absolute path of a dropped file,
+ * so the client uploads the raw bytes and this route decodes them with the same
+ * pipeline as readPreview. The result is always read-only: there is no known
+ * disk location to write back to.
+ */
+async function readExternalPreview(url, config, req) {
+  const contentType = header(req.headers, 'content-type')?.toLowerCase().replace(/\s/g, '')
+  if (contentType !== 'application/octet-stream' && contentType !== 'text/plain' && contentType !== 'text/plain;charset=utf-8') {
+    throw new HttpError(415, 'invalid-content-type', '外部文件上传必须使用二进制或文本内容')
+  }
+  const encodingId = url.searchParams.get('encoding') ?? 'utf-8'
+  encodingById(encodingId)
+  const rawName = url.searchParams.get('name') ?? ''
+  const name = typeof rawName === 'string' ? rawName.split(/[\\/]/).pop() ?? '' : ''
+  if (name !== '' && Buffer.byteLength(name, 'utf8') > config.maxEntryNameBytes) {
+    throw new HttpError(413, 'entry-name-too-large', '文件名过长')
+  }
+  const bytes = await readBody(
+    req,
+    config.maxExternalUploadBytes,
+    'file-too-large',
+    `外部文件不能超过 ${config.maxExternalUploadBytes} 字节`,
+  )
+  if (bytes.byteLength === 0) throw new HttpError(400, 'empty-file', '文件内容为空')
+  const previewBytes = bytes.subarray(0, Math.min(bytes.byteLength, config.maxPreviewBytes))
+  const truncated = bytes.byteLength > config.maxPreviewBytes
+  const isUtf16 = encodingId === 'utf-16le' || encodingId === 'utf-16be'
+  if (!isUtf16 && containsNul(previewBytes)) throw new HttpError(415, 'binary-file', '该文件包含二进制内容，无法进行文本预览')
+  const content = decodeBytes(previewBytes, encodingId, truncated)
+  if (content === undefined) throw new HttpError(415, 'invalid-encoding', `该文件不是有效的 ${encodingById(encodingId).label} 编码，无法预览`)
+  const metadata = textMetadata(previewBytes, content, encodingId)
+  const effectiveEncoding = effectiveReadEncoding(encodingId, metadata.bom)
+  return {
+    name,
+    content,
+    size: bytes.byteLength,
+    truncated,
+    encoding: effectiveEncoding,
+    editable: false,
+    readOnlyReason: 'external-file',
+    ...metadata,
+  }
+}
+
 function readBody(
   req,
   maximum,
@@ -1155,6 +1204,7 @@ async function handleRequest(ctx, config, trustedHosts, writeQueues, req, res) {
     const contextEndpoint = url.pathname === `${API_PREFIX}/context`
     const encodingsEndpoint = url.pathname === `${API_PREFIX}/encodings`
     const entryEndpoint = url.pathname === `${API_PREFIX}/entry`
+    const externalFileEndpoint = url.pathname === `${API_PREFIX}/external-file`
     const fileEndpoint = url.pathname === `${API_PREFIX}/file`
     const treeEndpoint = url.pathname === `${API_PREFIX}/tree`
     const searchEndpoint = url.pathname === `${API_PREFIX}/search`
@@ -1165,20 +1215,22 @@ async function handleRequest(ctx, config, trustedHosts, writeQueues, req, res) {
         ? 'GET, HEAD'
         : entryEndpoint
           ? 'POST, PATCH'
-          : fileEndpoint
-            ? 'GET, HEAD, PUT'
-            : treeEndpoint
-              ? 'GET, HEAD'
-              : searchEndpoint
+          : externalFileEndpoint
+            ? 'POST'
+            : fileEndpoint
+              ? 'GET, HEAD, PUT'
+              : treeEndpoint
                 ? 'GET, HEAD'
-                : revealEndpoint
-                  ? 'POST'
-                  : undefined
+                : searchEndpoint
+                  ? 'GET, HEAD'
+                  : revealEndpoint
+                    ? 'POST'
+                    : undefined
     if (allowed !== undefined && !allowed.split(', ').includes(req.method ?? '')) {
       sendError(req, res, 405, 'method-not-allowed', `该接口只允许 ${allowed} 请求`, { allow: allowed })
       return
     }
-    if (!contextEndpoint && !encodingsEndpoint && !entryEndpoint && !fileEndpoint && !treeEndpoint && !searchEndpoint && !revealEndpoint) {
+    if (!contextEndpoint && !encodingsEndpoint && !entryEndpoint && !externalFileEndpoint && !fileEndpoint && !treeEndpoint && !searchEndpoint && !revealEndpoint) {
       sendError(req, res, 404, 'endpoint-not-found', '接口不存在')
       return
     }
@@ -1188,6 +1240,10 @@ async function handleRequest(ctx, config, trustedHosts, writeQueues, req, res) {
     }
     if (encodingsEndpoint) {
       sendJson(req, res, 200, { encodings: ENCODINGS.map(({ id, label }) => ({ id, label })) })
+      return
+    }
+    if (externalFileEndpoint) {
+      sendJson(req, res, 200, await readExternalPreview(url, config, req))
       return
     }
     const workspaceId = requiredQuery(url, 'workspaceId')

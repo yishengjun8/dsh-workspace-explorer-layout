@@ -2,9 +2,9 @@ import React from 'react'
 import { createPortal } from 'react-dom'
 import { createSnapshotStore, defineStore } from '@deepseek-ai/dsh-client-runtime/client'
 import { EditorState, Compartment } from '@codemirror/state'
-import { EditorView, drawSelection, dropCursor, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from '@codemirror/view'
+import { EditorView, drawSelection, dropCursor, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers, panels } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
-import { searchKeymap, highlightSelectionMatches } from '@codemirror/search'
+import { closeSearchPanel, findNext, findPrevious, gotoLine, highlightSelectionMatches, openSearchPanel, search, selectNextOccurrence, selectSelectionMatches } from '@codemirror/search'
 import { bracketMatching, defaultHighlightStyle, foldable, foldEffect, foldGutter, foldKeymap, HighlightStyle, indentOnInput, syntaxHighlighting, StreamLanguage, unfoldAll } from '@codemirror/language'
 import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete'
 import { tags } from '@lezer/highlight'
@@ -29,7 +29,7 @@ import { toml } from '@codemirror/legacy-modes/mode/toml'
 import { dockerFile } from '@codemirror/legacy-modes/mode/dockerfile'
 import { clike } from '@codemirror/legacy-modes/mode/clike'
 
-const { Fragment, createElement: h, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } = React
+const { Fragment, createElement: h, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } = React
 const PACKAGE_ID = '@deepseek-ai/dsh-client-ui-workspace-explorer-layout'
 const API_PREFIX = '/workspace-explorer-layout/api'
 const EDITOR_CONTEXT_PROVIDER = 'workspace-editor-context'
@@ -40,9 +40,12 @@ const SIDEBAR_DEFAULT = 280, SIDEBAR_COLLAPSED = 56, SIDEBAR_MIN = 240, SIDEBAR_
 const EXPLORER_MAX_RATIO = 0.8
 const TREE_DEFAULT = 280, TREE_MIN = 220, TREE_MAX = 520
 const PREVIEW_DEFAULT = 420, PREVIEW_MIN = 280, PREVIEW_MAX = 760, RESIZE_STEP = 12
-const CONTEXT_MENU_WIDTH = 176, CONTEXT_MENU_HEIGHT = 124
+const CONTEXT_MENU_WIDTH = 176, CONTEXT_MENU_HEIGHT = 150
 const ROW_HEIGHT_DEFAULT = 28, ROW_HEIGHT_MIN = 20, ROW_HEIGHT_MAX = 48
 const CHAT_FONT_SIZE_DEFAULT = 16, CHAT_FONT_SIZE_MIN = 13, CHAT_FONT_SIZE_MAX = 20
+/* Whether search results show each file's matched rows expanded by default;
+ * the explorer settings page lets the user choose (default: expanded). */
+const SEARCH_MATCH_EXPAND_DEFAULT = true
 const EXPLORER_SETTINGS_STORE_KEY = 'dsh.workspace.explorer.settings.v1'
 const EXPLORER_LAYOUT_STORE_KEY = 'dsh.workspace.explorer.layout.v1'
 
@@ -93,7 +96,7 @@ const styles = `
 .dsh-wel-viewport{height:100%;min-width:0;overflow:auto;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}
 .dsh-wel-frame{--dsh-wel-sidebar:280px;--dsh-wel-preview:420px;position:relative;display:grid;grid-template-columns:var(--dsh-wel-sidebar) var(--dsh-wel-preview) minmax(0,1fr);grid-template-rows:100%;width:100%;min-width:0;height:100%;overflow:hidden;background:var(--dsw-alias-bg-base);transition:grid-template-columns var(--ds-transition-duration-slow) var(--ds-ease-in-out)}
 .dsh-wel-frame[data-resizing]{transition:none;user-select:none}.dsh-wel-sidebar,.dsh-wel-tree,.dsh-wel-preview,.dsh-wel-chat{min-width:0;height:100%;overflow:hidden}.dsh-wel-sidebar{background:var(--dsw-specific-sidebar-fill);border-right:1px solid var(--dsw-alias-border-l1)}
-.dsh-wel-tree,.dsh-wel-preview{display:flex;flex-direction:column;background:var(--dsw-alias-bg-layer-1);border-right:1px solid var(--dsw-alias-border-l2)}.dsh-wel-frame[data-explorer-closed] .dsh-wel-tree,.dsh-wel-frame[data-explorer-closed] .dsh-wel-preview{visibility:hidden;pointer-events:none;border-right:0}.dsh-wel-chat{display:flex;flex-direction:column;background:var(--dsw-alias-bg-base)}
+.dsh-wel-tree,.dsh-wel-preview{display:flex;flex-direction:column;position:relative;background:var(--dsw-alias-bg-layer-1);border-right:1px solid var(--dsw-alias-border-l2)}.dsh-wel-frame[data-explorer-closed] .dsh-wel-tree,.dsh-wel-frame[data-explorer-closed] .dsh-wel-preview{visibility:hidden;pointer-events:none;border-right:0}.dsh-wel-chat{display:flex;flex-direction:column;position:relative;background:var(--dsw-alias-bg-base)}
 .dsh-wel-panel-header{display:flex;align-items:center;gap:8px;min-height:52px;padding:0 12px;border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);box-sizing:border-box}.dsh-wel-panel-title{min-width:0;display:flex;flex:1;flex-direction:column;gap:2px}.dsh-wel-panel-title strong{overflow:hidden;color:var(--dsw-alias-label-primary);font-size:13px;line-height:18px;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-panel-title>span{overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:15px;text-overflow:ellipsis;white-space:nowrap}
 /* Preview page top rows (file tabs + active-file name) share the harness left
    sidebar fill so the file browsing page reads as one band with the sidebar. */
@@ -105,7 +108,7 @@ const styles = `
 .dsh-wel-context-row{box-sizing:border-box;display:flex;align-items:center;gap:8px;flex:none;width:min(var(--dsh-composer-card-max-width),max(0px,calc(100% - (var(--dsh-composer-side-clearance) * 2))));margin:0 auto;padding:0}.dsh-wel-context-prefix{display:flex;flex:1;align-items:center;gap:6px;min-width:0;min-height:28px;padding:5px 8px 5px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:22px;background:var(--dsw-specific-input-major);color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;line-height:16px;text-align:left;cursor:pointer}.dsh-wel-context-prefix:hover{color:var(--dsw-alias-label-primary)}.dsh-wel-context-prefix:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}.dsh-wel-context-prefix[data-inactive]{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-caption);filter:grayscale(1)}.dsh-wel-context-prefix-mark{flex:none;font-size:12px}.dsh-wel-context-prefix-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-message-context-summary{box-sizing:border-box;display:flex;align-items:center;align-self:flex-end;gap:6px;max-width:100%;min-height:24px;padding:3px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:22px;background:var(--dsw-specific-input-major);color:var(--dsw-alias-label-secondary);font-size:11px;line-height:16px}.dsh-wel-message-context-summary-mark{flex:none;font-size:12px}.dsh-wel-message-context-summary-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-message-context-summary-range{flex:none;color:var(--dsw-alias-label-caption)}.dsh-wel-message-context-bubble[data-dsh-wel-empty-prompt]{display:none}
 .dsh-wel-banner{padding:7px 12px;border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-state-warn-tertiary);color:var(--dsw-alias-state-warn-label);font-size:11px;line-height:16px}.dsh-wel-banner-actions{display:flex;gap:6px;margin-top:5px}.dsh-wel-status{padding:5px 12px;border-bottom:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-tertiary);font-size:11px}.dsh-wel-status[data-error]{color:var(--dsw-alias-state-error-primary)}.dsh-wel-error-card{max-width:300px;padding:14px 16px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:19px;text-align:left}.dsh-wel-dialog-backdrop{position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;padding:20px;background:var(--dsw-alias-bg-mask-1,rgba(0,0,0,.38));box-sizing:border-box}.dsh-wel-dialog{width:min(360px,100%);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-elevated,0 12px 36px rgba(0,0,0,.24));box-sizing:border-box}.dsh-wel-dialog-header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 14px;border-bottom:1px solid var(--dsw-alias-border-l2)}.dsh-wel-dialog-title{min-width:0;overflow:hidden;color:var(--dsw-alias-label-primary);font-size:13px;font-weight:600;line-height:18px;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-dialog-body{display:flex;flex-direction:column;gap:8px;padding:14px}.dsh-wel-dialog-input{width:100%;height:32px;padding:0 9px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;box-sizing:border-box}.dsh-wel-dialog-input:focus{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-1px}.dsh-wel-dialog-error{color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:18px}.dsh-wel-dialog-footer{display:flex;justify-content:flex-end;gap:8px;padding:0 14px 14px}
 .dsh-wel-frame [data-slot='sidebar.footer.action']{display:flex!important;flex-direction:column;align-items:stretch;width:100%;min-width:0}.dsh-wel-explorer-toggle{flex:none;display:flex;align-items:center;gap:8px;width:calc(100% + 8px);height:34px;margin:4px -4px 4px;padding:6px 2px 6px 10px;box-sizing:border-box;border:0;border-radius:12px;background:transparent;cursor:pointer;overflow:hidden;color:var(--dsw-alias-label-secondary);font-family:inherit;font-size:14px;line-height:22px;text-align:left}.dsh-wel-explorer-toggle:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsh-wel-explorer-toggle[data-open]{color:var(--dsw-alias-brand-primary)}.dsh-wel-explorer-toggle[data-rail]{width:36px;height:36px;margin:8px 0 10px;justify-content:center;gap:0;padding:0;border-radius:50%}.dsh-wel-explorer-toggle:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-2px}.dsh-wel-explorer-icon{flex:none;width:16px;height:16px}.dsh-wel-explorer-toggle[data-rail] .dsh-wel-explorer-icon{width:18px;height:18px}.dsh-wel-explorer-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.dsh-wel-splitter{position:absolute;top:0;bottom:0;z-index:8;width:8px;margin-left:-4px;border:0;background:transparent;cursor:col-resize;touch-action:none}.dsh-wel-splitter::after{content:'';position:absolute;top:0;bottom:0;left:3px;width:2px;background:transparent;transition:background var(--ds-transition-duration-fast) var(--ds-ease-in-out)}.dsh-wel-splitter:hover::after,.dsh-wel-splitter[data-dragging]::after,.dsh-wel-splitter:focus-visible::after{background:var(--dsw-alias-state-business-primary)}.dsh-wel-details{position:absolute;z-index:16;top:0;right:0;bottom:0;width:min(440px,45vw);overflow:hidden;border-left:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-elevated,0 12px 36px var(--dsw-alias-bg-mask-1));transform:translateX(0);opacity:1;transition:transform var(--ds-transition-duration-slow) var(--ds-ease-in-out),opacity var(--ds-transition-duration-fast) var(--ds-ease-in-out)}.dsh-wel-details[data-closed]{pointer-events:none;visibility:hidden;transform:translateX(100%);opacity:0}.dsh-wel-overlay{position:absolute;inset:0;z-index:20;pointer-events:none}.dsh-wel-overlay>*{pointer-events:auto}.dsh-wel-tree{position:relative}.dsh-wel-context-menu{position:fixed;z-index:40;min-width:168px;padding:6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-elevated,0 12px 36px rgba(0,0,0,.24));box-sizing:border-box}.dsh-wel-context-item{display:block;width:100%;height:30px;padding:0 10px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:30px;text-align:left;cursor:pointer;box-sizing:border-box}.dsh-wel-context-item:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsh-wel-context-item:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-2px}.dsh-wel-context-item:disabled{cursor:not-allowed;opacity:.5}.dsh-wel-context-item:disabled:hover{background:transparent;color:var(--dsw-alias-label-primary)}.dsh-wel-copy-notice{position:absolute;right:10px;bottom:10px;z-index:12;padding:5px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-size:11px;line-height:16px;box-shadow:var(--dsw-shadow-elevated,0 4px 12px rgba(0,0,0,.18))}@media(prefers-reduced-motion:reduce){.dsh-wel-frame,.dsh-wel-details,.dsh-wel-splitter::after{transition:none}}
+.dsh-wel-splitter{position:absolute;top:0;bottom:0;z-index:8;width:8px;margin-left:-4px;border:0;background:transparent;cursor:col-resize;touch-action:none}.dsh-wel-splitter::after{content:'';position:absolute;top:0;bottom:0;left:3px;width:2px;background:transparent;transition:background var(--ds-transition-duration-fast) var(--ds-ease-in-out)}.dsh-wel-splitter:hover::after,.dsh-wel-splitter[data-dragging]::after,.dsh-wel-splitter:focus-visible::after{background:var(--dsw-alias-state-business-primary)}.dsh-wel-details{position:absolute;z-index:16;top:0;right:0;bottom:0;width:min(440px,45vw);overflow:hidden;border-left:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-elevated,0 12px 36px var(--dsw-alias-bg-mask-1));transform:translateX(0);opacity:1;transition:transform var(--ds-transition-duration-slow) var(--ds-ease-in-out),opacity var(--ds-transition-duration-fast) var(--ds-ease-in-out)}.dsh-wel-details[data-closed]{pointer-events:none;visibility:hidden;transform:translateX(100%);opacity:0}.dsh-wel-overlay{position:absolute;inset:0;z-index:20;pointer-events:none}.dsh-wel-overlay>*{pointer-events:auto}.dsh-wel-tree{position:relative}.dsh-wel-context-menu{position:fixed;z-index:40;min-width:168px;padding:6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-elevated,0 12px 36px rgba(0,0,0,.24));box-sizing:border-box}.dsh-wel-context-item{display:block;width:100%;height:30px;padding:0 10px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:30px;text-align:left;cursor:pointer;box-sizing:border-box}.dsh-wel-context-item:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsh-wel-context-item:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-2px}.dsh-wel-context-item:disabled{cursor:not-allowed;opacity:.5}.dsh-wel-context-item:disabled:hover{background:transparent;color:var(--dsw-alias-label-primary)}.dsh-wel-context-separator{height:1px;margin:4px 0;border:0;background:var(--dsw-alias-border-l2)}.dsh-wel-copy-notice{position:absolute;right:10px;bottom:10px;z-index:12;padding:5px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-size:11px;line-height:16px;box-shadow:var(--dsw-shadow-elevated,0 4px 12px rgba(0,0,0,.18))}@media(prefers-reduced-motion:reduce){.dsh-wel-frame,.dsh-wel-details,.dsh-wel-splitter::after{transition:none}}
 .dsh-wel-search-header{flex-direction:column;align-items:stretch;gap:8px;padding:8px}
 .dsh-wel-search-input-row{display:flex;align-items:center;gap:6px}
 .dsh-wel-search-input{flex:1;min-width:0;height:30px;padding:0 9px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;box-sizing:border-box}
@@ -197,6 +200,59 @@ body[data-ds-dark-theme] .dsh-wel-editor-host{--dsh-wel-token-directive:#c586c0}
    otherwise extends flush to the right edge) so it reads as a symmetric card. */
 .dsh-wel-frame[data-sidebar-files] .dsh-wel-sidebar-files{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;margin-right:12px;--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2);--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2)}
 .dsh-wel-frame[data-sidebar-files] .dsh-wel-sidebar-files .dsh-wel-tree{flex:1;min-height:0;height:auto;border-right:0}
+/* CodeMirror search panel (Ctrl+F): rendered by panels({ topContainer }) into
+   the .dsh-wel-preview-search strip between the status bar and the preview
+   body, so the panel rules are scoped to that container. !important keeps the
+   controls legible regardless of the harness's global control styles; the
+   alias tokens adapt to the active GUI theme. Match marks live in the editor
+   content, so they stay scoped to the editor host. */
+.dsh-wel-preview-search{flex:none;min-width:0;background:var(--dsw-alias-bg-layer-1);user-select:none}
+.dsh-wel-preview-search .cm-panels.cm-panels-top{background:var(--dsw-alias-bg-layer-1)!important;color:var(--dsw-alias-label-primary)!important;border-bottom:1px solid var(--dsw-alias-border-l2)!important}
+.dsh-wel-preview-search .cm-panel.cm-search{padding:5px 36px 5px 6px}
+.dsh-wel-preview-search .cm-panel.cm-search .cm-textfield{height:28px;padding:0 8px;border:1px solid var(--dsw-alias-border-l2)!important;border-radius:6px;background:var(--dsw-alias-bg-base)!important;color:var(--dsw-alias-label-primary)!important;font:inherit!important;font-size:12px!important;box-sizing:border-box;user-select:text}
+.dsh-wel-preview-search .cm-panel.cm-search .cm-textfield:focus{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-1px}
+.dsh-wel-preview-search .cm-panel.cm-search .cm-button{height:26px;padding:0 8px;border:0!important;border-radius:6px;background:transparent!important;color:var(--dsw-alias-label-secondary)!important;font:inherit!important;font-size:12px!important;cursor:pointer}
+.dsh-wel-preview-search .cm-panel.cm-search .cm-button:hover{background:var(--dsw-alias-interactive-bg-hover)!important;color:var(--dsw-alias-label-primary)!important}
+.dsh-wel-preview-search .cm-panel.cm-search label{display:inline-flex;align-items:center;gap:3px;height:28px;transform:translateY(3px);color:var(--dsw-alias-label-secondary)!important}
+.dsh-wel-preview-search .cm-panel.cm-search input[type=checkbox]{margin:2px 0 0;vertical-align:middle;accent-color:var(--dsw-alias-state-business-primary)}
+.dsh-wel-preview-search .cm-panel.cm-search [name=close]{display:inline-flex!important;align-items:center!important;justify-content:center!important;position:absolute!important;top:50%!important;right:4px!important;transform:translateY(-50%)!important;width:30px!important;height:30px!important;padding:0 0 2px!important;margin:0!important;border:0!important;border-radius:8px!important;background:transparent!important;color:var(--dsw-alias-label-secondary)!important;font-size:18px!important;line-height:1!important;cursor:pointer!important;box-sizing:border-box!important}
+.dsh-wel-preview-search .cm-panel.cm-search [name=close]:hover{background:var(--dsw-alias-interactive-bg-hover)!important;color:var(--dsw-alias-label-primary)!important}
+/* The search field is wrapped (see CodeEditor) with a col-resize grip on its
+   right edge so the user can drag it wider/narrower. */
+.dsh-wel-preview-search .dsh-wel-search-field-wrap{display:inline-flex;align-items:center;vertical-align:middle}
+.dsh-wel-preview-search .dsh-wel-search-field-wrap .cm-textfield{flex:none;min-width:60px}
+.dsh-wel-preview-search .dsh-wel-search-resize{flex:none;width:6px;height:16px;margin:0 2px 0 4px;border-radius:3px;background:var(--dsw-alias-border-l2);cursor:col-resize;opacity:.65}
+.dsh-wel-preview-search .dsh-wel-search-resize:hover{background:var(--dsw-alias-state-business-primary);opacity:1}
+.dsh-wel-preview-search .dsh-wel-search-resize:active{background:var(--dsw-alias-state-business-primary);opacity:1}
+.dsh-wel-editor-host .cm-searchMatch{background-color:var(--dsw-alias-state-business-tertiary)!important}
+.dsh-wel-editor-host .cm-searchMatch-selected{background-color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 28%,transparent)!important}
+.dsh-wel-editor-host .cm-selectionMatch{background-color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 14%,transparent)!important}
+.dsh-wel-editor-host .cm-searchMatch .cm-selectionMatch{background-color:transparent!important}
+.dsh-wel-drop-overlay{position:absolute;inset:0;z-index:30;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 10%,transparent);pointer-events:none}
+.dsh-wel-drop-hint{display:inline-flex;align-items:center;padding:8px 14px;border:1px dashed var(--dsw-alias-state-business-primary);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-state-business-primary);font-size:12px;box-shadow:var(--dsw-shadow-elevated,0 8px 24px rgba(0,0,0,.18))}
+.dsh-wel-preview[data-drop-active] .dsh-wel-preview-tabs,.dsh-wel-preview[data-drop-active] .dsh-wel-panel-header,.dsh-wel-preview[data-drop-active] .dsh-wel-editor-host{pointer-events:none}
+/* Hide the harness's full-viewport chat drop mask (ui-attachment DropOverlay,
+   the only role="status" element portaled directly to body — verified against
+   the harness tree; its Toast uses role="alert" and every other role="status"
+   lives inside the app tree); the layout draws its own chat-confined mask
+   below so the mask covers the chat pane instead of the whole page. */
+body > [role="status"]{display:none!important}
+.dsh-wel-chat-drop-mask{position:absolute;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:var(--dsw-alias-bg-mask-drop,rgba(0,0,0,.32));backdrop-filter:blur(6px);pointer-events:none}
+.dsh-wel-chat-drop-card{display:flex;align-items:center;gap:10px;padding:12px 16px;border:1px dashed var(--dsw-alias-state-business-primary);border-radius:10px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:13px;box-shadow:var(--dsw-shadow-elevated,0 10px 28px rgba(0,0,0,.2))}
+.dsh-wel-chat-drop-close{position:absolute;top:12px;right:12px;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0 0 2px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font:inherit;font-size:16px;line-height:1;cursor:pointer;box-sizing:border-box;pointer-events:auto}
+.dsh-wel-chat-drop-close:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+/* Close button on the preview drop hint, matching the chat drop mask. */
+.dsh-wel-drop-close{position:absolute;top:12px;right:12px;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0 0 2px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font:inherit;font-size:16px;line-height:1;cursor:pointer;box-sizing:border-box;pointer-events:auto}
+.dsh-wel-drop-close:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+/* Transient top-center banner matching the harness conversation Toast look
+   (contrast fill, inverted label, slide-in, hold-and-fade) so a failed
+   external-file open announces like the composer's image-intake rejections. */
+.dsh-wel-toast{position:fixed;top:120px;left:50%;z-index:1100;pointer-events:none;display:flex;align-items:center;gap:10px;max-width:min(560px,calc(100vw - 48px));padding:12px 16px;border-radius:14px;background:var(--dsw-alias-button-contrast-fill);color:var(--dsw-alias-label-primary-inverted);font-size:14px;line-height:22px;box-shadow:var(--dsw-shadow-lv3);transform:translateX(-50%);animation:dsh-wel-toast-in 160ms ease-out,dsh-wel-toast-fade 1000ms ease 3000ms forwards}
+.dsh-wel-toast-icon{display:grid;place-items:center;flex:none;color:var(--dsw-alias-state-warn-label)}
+.dsh-wel-toast-text{min-width:0}
+@keyframes dsh-wel-toast-in{from{opacity:0;transform:translate(-50%,-6px)}to{opacity:1;transform:translate(-50%,0)}}
+@keyframes dsh-wel-toast-fade{to{opacity:0}}
+@media (prefers-reduced-motion: reduce){.dsh-wel-toast{animation:dsh-wel-toast-fade 1000ms ease 3000ms forwards}}
 `
 
 const tokenHighlight = HighlightStyle.define([
@@ -481,6 +537,7 @@ const READ_ONLY_REASONS = Object.freeze({
   'read-only': '此文件为只读',
   'editing-disabled': '当前配置未启用文件编辑',
   'symlink-path': '符号链接路径仅允许浏览',
+  'external-file': '外部文件仅支持浏览',
 })
 
 function readOnlyReason(preview) {
@@ -493,6 +550,36 @@ function readOnlyReason(preview) {
 const fileLabel = name => languageFor(name).label
 const clamp = (value, min, max) => Math.min(max, Math.max(min, Math.round(value)))
 function formatBytes(bytes) { if (!Number.isFinite(bytes) || bytes < 0) return ''; if (bytes < 1024) return `${bytes} B`; if (bytes < 1048576) return `${(bytes / 1024).toFixed(bytes < 10240 ? 1 : 0)} KB`; return `${(bytes / 1048576).toFixed(1)} MB` }
+// The preview pane only responds to "normal" (non-image) file drags; images
+// belong to the chat composer. Empty MIME types are treated as normal files —
+// the server decides text-likeness and a failure is silently ignored.
+function isImageFile(file) {
+  const type = typeof file?.type === 'string' ? file.type : ''
+  return type.startsWith('image/')
+}
+// File-drag detection mirroring the harness composer's own check: the
+// dataTransfer.types list is authoritative and stable during the whole drag,
+// while dataTransfer.files is only guaranteed populated at drop time.
+function hasDraggedFiles(event) {
+  const dataTransfer = event?.dataTransfer
+  if (dataTransfer === null || dataTransfer === undefined) return false
+  if ((dataTransfer.files?.length ?? 0) > 0) return true
+  try {
+    return typeof dataTransfer.types?.includes === 'function' && dataTransfer.types.includes('Files')
+  } catch {
+    return false
+  }
+}
+// Whether the drag carries at least one non-image file. During dragover the
+// File objects may not be inspectable yet; then any file drag counts as
+// "normal" (the drop itself still filters images and ignores them silently).
+function hasNormalFile(event) {
+  if (!hasDraggedFiles(event)) return false
+  const files = event.dataTransfer?.files
+  if (files === undefined || files.length === 0) return true
+  for (const file of files) if (!isImageFile(file)) return true
+  return false
+}
 // The persisted sidebar width lives with the explorer pane geometry
 // (EXPLORER_LAYOUT_STORE_KEY): the live value rides the root layout store,
 // which cannot persist its whole value (it also carries large file drafts), so
@@ -582,6 +669,7 @@ function createExplorerSettingsStore() {
       rowHeight: ROW_HEIGHT_DEFAULT,
       chatFontSize: CHAT_FONT_SIZE_DEFAULT,
       wrap: false,
+      expandSearchMatches: SEARCH_MATCH_EXPAND_DEFAULT,
       fileColors: {},
       highlightPresets: {},
     }),
@@ -590,6 +678,7 @@ function createExplorerSettingsStore() {
       setRowHeight: (draft, value) => { draft.rowHeight = clamp(value, ROW_HEIGHT_MIN, ROW_HEIGHT_MAX) },
       setChatFontSize: (draft, value) => { draft.chatFontSize = clamp(value, CHAT_FONT_SIZE_MIN, CHAT_FONT_SIZE_MAX) },
       setWrap: (draft, value) => { draft.wrap = Boolean(value) },
+      setExpandSearchMatches: (draft, value) => { draft.expandSearchMatches = Boolean(value) },
       setFileColor: (draft, group, value) => {
         if (draft.fileColors === undefined) draft.fileColors = {}
         if (String(value).toLowerCase() === fileColorDefault(group).toLowerCase()) delete draft.fileColors[group]
@@ -921,6 +1010,11 @@ function installEditorContextMessageCompactor() {
     bubble.textContent = context.visibleText
   }
   const compactContainer = (container) => {
+    // Fast path: most containers never carry an editor-context envelope; the
+    // prefix check skips the element scan for them on every mutation batch
+    // (streaming chat mutates character data continuously).
+    const text = container.textContent ?? ''
+    if (!text.startsWith(OPENED_FILE_PREFIX) && !text.startsWith(SELECTION_PREFIX)) return
     const candidate = findEditorContextCandidate(container)
     const bubble = candidate === null ? null : findEditorContextBubble(candidate)
     if (bubble !== null) compactBubble(bubble)
@@ -1072,34 +1166,42 @@ class PromptContextBridge {
   }
   ensure(id) {
     if (this.inputPatches.has(id)) return
-    const binding = this.ctx.sessions.binding(id)
-    if (binding === undefined || this.conversation === undefined) return
-    const input = this.conversation.input.for(binding.ctx)
-    const original = input.submit
-    const originalSteerQueue = input.steerQueue
-    if (typeof original !== 'function' || typeof originalSteerQueue !== 'function') {
-      throw new Error('workspace-explorer-layout requires the Harness 0.1.x session input submit and queue-steer seams')
-    }
-    const bridge = this
-    const wrapper = function submitWithEditorContext(mode = 'queue') {
-      const state = input.state.getSnapshot()
-      if (bridge.directSession(id) && state.draft.trim() === '' && state.imageIds.length === 0 && bridge.editorContexts.active(id)) {
-        void bridge.sendContextOnly(id, mode)
+    // Missing seams must never escape into the sessions-list subscription
+    // dispatch (a throw there could break later subscribers); the session
+    // simply keeps its original input behavior.
+    try {
+      const binding = this.ctx.sessions.binding(id)
+      if (binding === undefined || this.conversation === undefined) return
+      const input = this.conversation.input.for(binding.ctx)
+      const original = input.submit
+      const originalSteerQueue = input.steerQueue
+      if (typeof original !== 'function' || typeof originalSteerQueue !== 'function') {
+        console.error(`workspace-explorer-layout: session ${id} input submit/steer seams unavailable; editor context will not attach`)
         return
       }
-      return original.call(input, mode)
-    }
-    const steerWrapper = function steerQueueWithEditorContext() {
-      const state = input.state.getSnapshot()
-      if (bridge.directSession(id) && state.draft.trim() === '' && state.imageIds.length === 0 && bridge.editorContexts.active(id)) {
-        void bridge.sendContextOnly(id, 'steer')
-        return
+      const bridge = this
+      const wrapper = function submitWithEditorContext(mode = 'queue') {
+        const state = input.state.getSnapshot()
+        if (bridge.directSession(id) && state.draft.trim() === '' && state.imageIds.length === 0 && bridge.editorContexts.active(id)) {
+          void bridge.sendContextOnly(id, mode)
+          return
+        }
+        return original.call(input, mode)
       }
-      return originalSteerQueue.call(input)
+      const steerWrapper = function steerQueueWithEditorContext() {
+        const state = input.state.getSnapshot()
+        if (bridge.directSession(id) && state.draft.trim() === '' && state.imageIds.length === 0 && bridge.editorContexts.active(id)) {
+          void bridge.sendContextOnly(id, 'steer')
+          return
+        }
+        return originalSteerQueue.call(input)
+      }
+      input.submit = wrapper
+      input.steerQueue = steerWrapper
+      this.inputPatches.set(id, { input, original, wrapper, originalSteerQueue, steerWrapper })
+    } catch (error) {
+      console.error(`workspace-explorer-layout: failed to patch input seams for session ${id}:`, error)
     }
-    input.submit = wrapper
-    input.steerQueue = steerWrapper
-    this.inputPatches.set(id, { input, original, wrapper, originalSteerQueue, steerWrapper })
   }
   restoreInput(id, patch) {
     if (patch.input.submit === patch.wrapper) patch.input.submit = patch.original
@@ -1139,6 +1241,27 @@ class WorkspaceApiError extends Error {
 }
 async function requestJson(endpoint, workspaceId, path, signal, encoding) { const query=new URLSearchParams({workspaceId,path});if(encoding!==undefined&&encoding!==null)query.set('encoding',String(encoding));const response=await fetch(`${API_PREFIX}/${endpoint}?${query}`,{method:'GET',headers:{accept:'application/json'},credentials:'same-origin',signal});let payload;try{payload=await response.json()}catch(error){if(error?.name==='AbortError')throw error;throw new WorkspaceApiError('invalid-response',`工作区接口返回了无效响应（HTTP ${response.status}）`,response.status)}if(!response.ok){const failure=payload?.error;throw new WorkspaceApiError(typeof failure?.code==='string'?failure.code:'request-failed',typeof failure?.message==='string'?failure.message:`读取工作区失败（HTTP ${response.status}）`,response.status)}return payload }
 async function putFile(workspaceId,path,content,revision,signal,encoding){const query=new URLSearchParams({workspaceId:String(workspaceId),path});if(encoding!==undefined&&encoding!==null)query.set('encoding',String(encoding));const headers={'content-type':'text/plain; charset=utf-8',accept:'application/json'};if(revision!==undefined&&revision!==null)headers['if-match']=String(revision);const response=await fetch(`${API_PREFIX}/file?${query}`,{method:'PUT',headers,credentials:'same-origin',body:content,signal});let payload;try{payload=await response.json()}catch(error){if(error?.name==='AbortError')throw error;throw new WorkspaceApiError('invalid-response',`保存接口返回了无效响应（HTTP ${response.status}）`,response.status)}if(!response.ok){const failure=payload?.error;throw new WorkspaceApiError(typeof failure?.code==='string'?failure.code:'save-failed',typeof failure?.message==='string'?failure.message:`保存文件失败（HTTP ${response.status}）`,response.status)}return payload}
+// Upload a non-workspace file dropped into the preview pane. Browsers hide the
+// absolute path of dropped files, so the raw bytes go to the plugin's own
+// endpoint, which decodes them and returns a read-only preview payload.
+async function uploadExternalFile(bytes, name, signal, encoding) {
+  const query = new URLSearchParams()
+  if (typeof name === 'string' && name !== '') query.set('name', name)
+  if (encoding !== undefined && encoding !== null) query.set('encoding', String(encoding))
+  const response = await fetch(`${API_PREFIX}/external-file?${query}`, { method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/octet-stream' }, credentials: 'same-origin', body: bytes, signal })
+  let payload
+  try {
+    payload = await response.json()
+  } catch (error) {
+    if (error?.name === 'AbortError') throw error
+    throw new WorkspaceApiError('invalid-response', `外部文件接口返回了无效响应（HTTP ${response.status}）`, response.status)
+  }
+  if (!response.ok) {
+    const failure = payload?.error
+    throw new WorkspaceApiError(typeof failure?.code === 'string' ? failure.code : 'external-file-failed', typeof failure?.message === 'string' ? failure.message : `打开外部文件失败（HTTP ${response.status}）`, response.status)
+  }
+  return payload
+}
 async function renderContext(sessionId,context,signal){const response=await fetch(`${API_PREFIX}/context`,{method:'POST',headers:{accept:'application/json','content-type':'application/json'},credentials:'same-origin',body:JSON.stringify({...context,sessionId:String(sessionId)}),signal});let payload;try{payload=await response.json()}catch(error){if(error?.name==='AbortError')throw error;throw new WorkspaceApiError('invalid-response',`编辑器上下文接口返回了无效响应（HTTP ${response.status}）`,response.status)}if(!response.ok){const failure=payload?.error;throw new WorkspaceApiError(typeof failure?.code==='string'?failure.code:'context-failed',typeof failure?.message==='string'?failure.message:`无法提交编辑器上下文（HTTP ${response.status}）`,response.status)}if(typeof payload?.text!=='string')throw new WorkspaceApiError('invalid-response','编辑器上下文接口缺少文本结果',response.status);return payload.text}
 async function mutateEntry(method,workspaceId,path,payload,signal){const query=new URLSearchParams({workspaceId:String(workspaceId),path});const response=await fetch(`${API_PREFIX}/entry?${query}`,{method,headers:{accept:'application/json','content-type':'application/json'},credentials:'same-origin',body:JSON.stringify(payload),signal});let result;try{result=await response.json()}catch(error){if(error?.name==='AbortError')throw error;throw new WorkspaceApiError('invalid-response',`工作区修改接口返回了无效响应（HTTP ${response.status}）`,response.status)}if(!response.ok){const failure=result?.error;throw new WorkspaceApiError(typeof failure?.code==='string'?failure.code:'entry-failed',typeof failure?.message==='string'?failure.message:`工作区修改失败（HTTP ${response.status}）`,response.status)}return result}
 async function requestSearch(workspaceId,query,caseSensitive,signal){const params=new URLSearchParams({workspaceId:String(workspaceId),q:query,caseSensitive:caseSensitive?'true':'false'});const response=await fetch(`${API_PREFIX}/search?${params}`,{method:'GET',headers:{accept:'application/json'},credentials:'same-origin',signal});let payload;try{payload=await response.json()}catch(error){if(error?.name==='AbortError')throw error;throw new WorkspaceApiError('invalid-response',`搜索接口返回了无效响应（HTTP ${response.status}）`,response.status)}if(!response.ok){const failure=payload?.error;throw new WorkspaceApiError(typeof failure?.code==='string'?failure.code:'search-failed',typeof failure?.message==='string'?failure.message:`搜索失败（HTTP ${response.status}）`,response.status)}return payload}
@@ -1182,12 +1305,16 @@ function clonePreviewTab(tab) {
     draft: typeof tab.draft === 'string' ? tab.draft : '',
     editing: Boolean(tab.editing),
     encoding: typeof tab.encoding === 'string' && tab.encoding !== '' ? tab.encoding : 'utf-8',
+    external: Boolean(tab.external),
     lineEnding: typeof tab.lineEnding === 'string' ? tab.lineEnding : 'none',
     name: typeof tab.name === 'string' && tab.name !== '' ? tab.name : tab.path.slice(tab.path.lastIndexOf('/') + 1),
     path: tab.path,
     pinned: Boolean(tab.pinned),
     revision: tab.revision === undefined ? null : tab.revision,
-    saving: Boolean(tab.saving),
+    // The in-flight flag must never be persisted or restored: a refresh
+    // mid-save would otherwise bring back a tab stuck in "saving" with every
+    // action (close/save/cancel) disabled and no recovery path.
+    saving: false,
     scrollTop: Number.isFinite(tab.scrollTop) ? tab.scrollTop : 0,
     size: Number.isFinite(tab.size) ? tab.size : null,
     status: tab.status === undefined || tab.status === null
@@ -1204,6 +1331,14 @@ function clonePreviewTab(tab) {
 function serializePreviewTab(tab) {
   const clone = clonePreviewTab(tab)
   if (clone === null) return null
+  // The "正在保存…" status only exists while a save is in flight; a persisted
+  // copy must not resurrect it as a stale banner after refresh.
+  if (tab.saving) clone.status = undefined
+  // Dropped non-workspace files are session-only previews: their content lives
+  // only in memory (persisting it would re-introduce the localStorage quota
+  // blow-up the slim serialization was written to prevent), so refresh drops
+  // them and they are excluded from every persisted snapshot.
+  if (clone.external) return null
   if (!clone.dirty) {
     clone.baseText = ''
     clone.draft = ''
@@ -1306,7 +1441,9 @@ function serializePreviewSession(activePath, tabs, expanded) {
   for (const tab of tabs) {
     if (tab === undefined || tab === null || seen.has(tab.path)) continue
     seen.add(tab.path)
-    normalized.push(serializePreviewTab(tab))
+    const serialized = serializePreviewTab(tab)
+    if (serialized === null) continue
+    normalized.push(serialized)
   }
   // Root ('') is always expanded by default and never stored; only real
   // folders participate in the persisted set.
@@ -1392,12 +1529,24 @@ function SidebarTopActions({ collapsed, view, width, onSelectSessions, onSelectF
 function ResizeHandle({label,left,value,min,max,onResize,onDragging}){const[dragging,setDragging]=useState(false),origin=useRef(0),base=useRef(0);const start=useCallback(e=>{e.preventDefault();e.currentTarget.setPointerCapture(e.pointerId);origin.current=e.clientX;base.current=value;setDragging(true);onDragging(true)},[onDragging,value]);const move=useCallback(e=>{if(e.currentTarget.hasPointerCapture(e.pointerId))onResize(clamp(base.current+e.clientX-origin.current,min,max))},[max,min,onResize]);const end=useCallback(e=>{if(!e.currentTarget.hasPointerCapture(e.pointerId))return;e.currentTarget.releasePointerCapture(e.pointerId);onResize(clamp(base.current+e.clientX-origin.current,min,max));setDragging(false);onDragging(false)},[max,min,onDragging,onResize]);return h('div',{'aria-label':label,'aria-orientation':'vertical','aria-valuemax':max,'aria-valuemin':min,'aria-valuenow':value,className:'dsh-wel-splitter','data-dragging':dragging||undefined,onKeyDown:e=>{if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();onResize(clamp(value+(e.key==='ArrowLeft'?-RESIZE_STEP:RESIZE_STEP),min,max))}},onLostPointerCapture:()=>{setDragging(false);onDragging(false)},onPointerCancel:end,onPointerDown:start,onPointerMove:move,onPointerUp:end,role:'separator',style:{left},tabIndex:0})}
 function HeaderAction({action}){return h('button',{'aria-label':action.label,className:'dsh-wel-icon-button','data-active':action.active||undefined,disabled:action.disabled||undefined,onClick:action.onClick,title:action.title??action.label,type:'button'},action.icon)}
 function PanelHeader({title,subtitle,action,actionLabel,actions=[],onContextMenu}){const items=[...actions];if(action)items.push({label:actionLabel,onClick:action,icon:h(IconRefresh)});return h('header',{className:'dsh-wel-panel-header'},h('div',{className:'dsh-wel-panel-title',onContextMenu},h('strong',{title},title),subtitle?h('span',{title:subtitle},subtitle):null),items.length?h('div',{className:'dsh-wel-panel-actions'},items.map(item=>h(HeaderAction,{action:item,key:item.label}))):null)}
-function TreeRow({entry,depth,expanded,selected,onContextMenu,onDirectory,onFile,onRename}){const directory=entry.kind==='directory',blocked=entry.kind==='blocked'||entry.kind==='other',label=directory?'dir':fileLabel(entry.name);return h('button',{'aria-expanded':directory?expanded:undefined,className:'dsh-wel-tree-row','data-selected':selected||undefined,disabled:blocked,onClick:directory?()=>onDirectory(entry):()=>onFile(entry),onContextMenu:e=>onContextMenu(e,entry),onKeyDown:e=>{if(e.key==='F2'){e.preventDefault();onRename(entry)}},style:{'--dsh-wel-depth':depth},title:`${entry.path}${entry.symlink?'（符号链接）':''}`,type:'button'},h('span',{className:'dsh-wel-chevron'},directory?(expanded?'▼':'▶'):''),h('span',{className:'dsh-wel-file-mark','data-kind':entry.kind,'data-group':colorGroupOf(entry)},label.slice(0,3)),h('span',{className:'dsh-wel-row-name'},entry.name),entry.symlink?h('span',{className:'dsh-wel-symlink'},'↗'):null)}
+/* Memoized: the tree re-renders when tabs change (typing, tab drags), but a
+   row's own props only change on selection/expansion/directory data, so
+   scrolling and typing skip most row reconciliation entirely. */
+const TreeRow = memo(function TreeRow({entry,depth,expanded,selected,onContextMenu,onDirectory,onFile,onRename}){const directory=entry.kind==='directory',blocked=entry.kind==='blocked'||entry.kind==='other',label=directory?'dir':fileLabel(entry.name);return h('button',{'aria-expanded':directory?expanded:undefined,className:'dsh-wel-tree-row','data-selected':selected||undefined,disabled:blocked,onClick:directory?()=>onDirectory(entry):()=>onFile(entry),onContextMenu:e=>onContextMenu(e,entry),onKeyDown:e=>{if(e.key==='F2'){e.preventDefault();onRename(entry)}},style:{'--dsh-wel-depth':depth},title:`${entry.path}${entry.symlink?'（符号链接）':''}`,type:'button'},h('span',{className:'dsh-wel-chevron'},directory?(expanded?'▼':'▶'):''),h('span',{className:'dsh-wel-file-mark','data-kind':entry.kind,'data-group':colorGroupOf(entry)},label.slice(0,3)),h('span',{className:'dsh-wel-row-name'},entry.name),entry.symlink?h('span',{className:'dsh-wel-symlink'},'↗'):null)})
 const TreeStatus=({children,error})=>h('div',{className:'dsh-wel-tree-status','data-error':error||undefined},children)
-function TreeContextMenu({entry,menuRef,onCopyPath,onReveal,x,y}){const left=Math.max(4,Math.min(x,window.innerWidth-CONTEXT_MENU_WIDTH-4)),top=Math.max(4,Math.min(y,window.innerHeight-CONTEXT_MENU_HEIGHT-4));return h('div',{'aria-label':entry.path,className:'dsh-wel-context-menu',ref:menuRef,role:'menu',style:{left,top}},h('button',{className:'dsh-wel-context-item',onClick:()=>onCopyPath(entry,false),role:'menuitem',title:'复制文件的完整绝对路径',type:'button'},'复制路径'),h('button',{className:'dsh-wel-context-item',onClick:()=>onCopyPath(entry,true),role:'menuitem',title:'复制相对工作区根目录的路径',type:'button'},'复制相对路径'),h('button',{className:'dsh-wel-context-item',onClick:()=>onReveal(entry),role:'menuitem',title:'在操作系统的文件管理器中打开此文件或文件夹',type:'button'},'在资源管理器中打开'))}
+function TreeContextMenu({entry,menuRef,onCopyName,onCopyPath,onReveal,x,y}){const left=Math.max(4,Math.min(x,window.innerWidth-CONTEXT_MENU_WIDTH-4)),top=Math.max(4,Math.min(y,window.innerHeight-CONTEXT_MENU_HEIGHT-4));return h('div',{'aria-label':entry.path,className:'dsh-wel-context-menu',ref:menuRef,role:'menu',style:{left,top}},h('button',{className:'dsh-wel-context-item',onClick:()=>onCopyName(entry),role:'menuitem',title:'复制此文件或文件夹的完整名称（含扩展名）',type:'button'},'复制名称'),h('button',{className:'dsh-wel-context-item',onClick:()=>onCopyPath(entry,false),role:'menuitem',title:'复制文件的完整绝对路径',type:'button'},'复制路径'),h('button',{className:'dsh-wel-context-item',onClick:()=>onCopyPath(entry,true),role:'menuitem',title:'复制相对工作区根目录的路径',type:'button'},'复制相对路径'),h('div',{className:'dsh-wel-context-separator',role:'separator'}),h('button',{className:'dsh-wel-context-item',onClick:()=>onReveal(entry),role:'menuitem',title:'在操作系统的文件管理器中打开此文件或文件夹',type:'button'},'在资源管理器中打开'))}
 function TabContextMenu({menuRef,onCloseOthers,onTogglePin,pinned,x,y}){const left=Math.max(4,Math.min(x,window.innerWidth-CONTEXT_MENU_WIDTH-4)),top=Math.max(4,Math.min(y,window.innerHeight-CONTEXT_MENU_HEIGHT-4));return h('div',{className:'dsh-wel-context-menu',ref:menuRef,role:'menu',style:{left,top}},h('button',{className:'dsh-wel-context-item',onClick:onTogglePin,role:'menuitem',title:pinned?'取消固定此标签页':'固定此标签页并移动到标签开头',type:'button'},pinned?'取消固定':'固定标签'),h('button',{className:'dsh-wel-context-item',onClick:onCloseOthers,role:'menuitem',title:'关闭除当前标签外的所有未固定标签页',type:'button'},'关闭其他标签页'))}
 function EntryDialog({dialog,draft,error,busy,blocked,composingRef,onCancel,onConfirm,onDraft}){if(!dialog)return null;const title=entryDialogTitle(dialog),action=entryDialogAction(dialog);return h('div',{className:'dsh-wel-dialog-backdrop',onMouseDown:e=>{if(e.target===e.currentTarget)onCancel()}},h('div',{'aria-modal':true,className:'dsh-wel-dialog',role:'dialog'},h('div',{className:'dsh-wel-dialog-header'},h('div',{className:'dsh-wel-dialog-title'},title),h('button',{'aria-label':'关闭',className:'dsh-wel-icon-button',disabled:busy,onClick:onCancel,title:'关闭',type:'button'},'×')),h('div',{className:'dsh-wel-dialog-body'},h('input',{'aria-label':'名称',autoFocus:true,className:'dsh-wel-dialog-input',disabled:busy,onChange:e=>onDraft(e.target.value),onCompositionEnd:()=>{composingRef.current=false},onCompositionStart:()=>{composingRef.current=true},onFocus:e=>e.target.select(),onKeyDown:e=>{if(e.key==='Escape'){e.preventDefault();onCancel()}else if(e.key==='Enter'&&!composingRef.current){e.preventDefault();onConfirm()}},value:draft}),error?h('div',{className:'dsh-wel-dialog-error',role:'alert'},error):null),h('div',{className:'dsh-wel-dialog-footer'},h('button',{className:'dsh-wel-text-button',disabled:busy,onClick:onCancel,type:'button'},'取消'),h('button',{className:'dsh-wel-text-button',disabled:blocked,onClick:onConfirm,type:'button'},busy?'处理中…':action))))}
 function EncodingMenu({menuRef,onOpen,onSave,canOpen,canSave,x,y}){const left=Math.max(4,Math.min(x,window.innerWidth-CONTEXT_MENU_WIDTH-4)),top=Math.max(4,Math.min(y,window.innerHeight-CONTEXT_MENU_HEIGHT-4));return h('div',{className:'dsh-wel-context-menu',ref:menuRef,role:'menu',style:{left,top}},h('button',{className:'dsh-wel-context-item',disabled:!canOpen,onClick:onOpen,role:'menuitem',title:canOpen?'用所选编码重新解码并展示此文件':'有未保存的更改，请先保存或取消后再切换编码打开',type:'button'},'以编码打开…'),h('button',{className:'dsh-wel-context-item',disabled:!canSave,onClick:onSave,role:'menuitem',title:canSave?'将当前文件内容用所选编码写回磁盘':'该文件当前不能编辑，无法另存为编码',type:'button'},'另存为编码…'))}
+/* Transient top-center banner mirroring the harness conversation Toast: same
+   fixed placement, contrast fill, hold-then-fade timing and body portal, so a
+   failed external-file open reads exactly like the composer's image-intake
+   rejection. The owner remounts it per show (keyed by seq) to restart the
+   animation for repeated identical messages. */
+const WEL_TOAST_HOLD_MS = 3000
+const WEL_TOAST_FADE_MS = 1000
+const welToastIcon = h('svg',{fill:'none',height:16,viewBox:'0 0 16 16',width:16},h('circle',{cx:8,cy:8,r:6.5,stroke:'currentColor',strokeWidth:1.5}),h('path',{d:'M8 4.75v3.5',stroke:'currentColor',strokeLinecap:'round',strokeWidth:1.5}),h('circle',{cx:8,cy:11.25,fill:'currentColor',r:0.9}))
+function PreviewToast({text,onDone}){useEffect(()=>{const timer=setTimeout(onDone,WEL_TOAST_HOLD_MS+WEL_TOAST_FADE_MS);return()=>clearTimeout(timer)},[onDone]);return createPortal(h('div',{className:'dsh-wel-toast',role:'alert'},h('span',{'aria-hidden':true,className:'dsh-wel-toast-icon'},welToastIcon),h('span',{className:'dsh-wel-toast-text'},text)),document.body)}
 function EncodingDialog({dialog,options,value,busy,onCancel,onPick,onConfirm}){if(dialog===undefined)return null;const title=dialog.mode==='open'?'以编码打开':'另存为编码',action=dialog.mode==='open'?'打开':'保存';return h('div',{className:'dsh-wel-dialog-backdrop',onMouseDown:e=>{if(e.target===e.currentTarget&&!busy)onCancel()}},h('div',{'aria-modal':true,className:'dsh-wel-dialog',role:'dialog'},h('div',{className:'dsh-wel-dialog-header'},h('div',{className:'dsh-wel-dialog-title'},title),h('button',{'aria-label':'关闭',className:'dsh-wel-icon-button',disabled:busy,onClick:onCancel,title:'关闭',type:'button'},'×')),h('div',{className:'dsh-wel-dialog-body'},h('label',{className:'dsh-wel-settings-label',htmlFor:'dsh-wel-encoding-select'},'文件编码'),h('select',{'aria-label':'文件编码',className:'dsh-wel-highlight-preset-select',disabled:busy,id:'dsh-wel-encoding-select',onChange:e=>onPick(e.target.value),value},options.map(enc=>h('option',{key:enc.id,value:enc.id},enc.label)))),h('div',{className:'dsh-wel-dialog-footer'},h('button',{className:'dsh-wel-text-button',disabled:busy,onClick:onCancel,type:'button'},'取消'),h('button',{className:'dsh-wel-text-button',disabled:busy||options.length===0,onClick:onConfirm,type:'button'},busy?'处理中…':action))))}
 function SessionRenameDialog({draft,busy,error,onCancel,onConfirm,onDraft}){return h('div',{className:'dsh-wel-dialog-backdrop',onMouseDown:e=>{if(e.target===e.currentTarget&&!busy)onCancel()}},h('div',{'aria-modal':true,className:'dsh-wel-dialog',role:'dialog'},h('div',{className:'dsh-wel-dialog-header'},h('div',{className:'dsh-wel-dialog-title'},'重命名当前会话'),h('button',{'aria-label':'关闭',className:'dsh-wel-icon-button',disabled:busy,onClick:onCancel,title:'关闭',type:'button'},'×')),h('div',{className:'dsh-wel-dialog-body'},h('input',{'aria-label':'会话名称',autoFocus:true,className:'dsh-wel-dialog-input',disabled:busy,onChange:e=>onDraft(e.target.value),onFocus:e=>e.target.select(),onKeyDown:e=>{if(e.key==='Escape'){e.preventDefault();onCancel()}else if(e.key==='Enter'){e.preventDefault();onConfirm()}},value:draft}),error?h('div',{className:'dsh-wel-dialog-error',role:'alert'},error):null),h('div',{className:'dsh-wel-dialog-footer'},h('button',{className:'dsh-wel-text-button',disabled:busy,onClick:onCancel,type:'button'},'取消'),h('button',{className:'dsh-wel-text-button',disabled:busy||draft.trim()==='',onClick:onConfirm,type:'button'},busy?'处理中…':'重命名'))))}
 
@@ -1432,19 +1581,29 @@ function collectFoldableRanges(view) {
   }
   return ranges
 }
-function foldLevelOf(range, ranges) {
-  let depth = 1
-  for (const other of ranges) {
-    if (other !== range && other.from <= range.from && other.to >= range.to) depth += 1
+/* Nesting depth per foldable range: 1 for a top-level region, +1 per
+   enclosing region. CodeMirror fold regions are disjoint-or-nested and
+   collected in document order, so one stack sweep computes every depth in
+   linear time (the previous per-range scan was quadratic on large files). */
+function foldLevelsOf(ranges) {
+  const ordered = [...ranges].sort((a, b) => a.from - b.from || b.to - a.to)
+  const levels = new Array(ordered.length)
+  const stack = []
+  for (let index = 0; index < ordered.length; index += 1) {
+    const range = ordered[index]
+    while (stack.length > 0 && stack[stack.length - 1].to <= range.from) stack.pop()
+    levels[index] = stack.length + 1
+    stack.push(range)
   }
-  return depth
+  return { ordered, levels }
 }
 /* Fold every foldable region whose nesting depth is exactly `level`. */
 function foldLevel(view, level) {
   const ranges = collectFoldableRanges(view)
+  const { ordered, levels } = foldLevelsOf(ranges)
   const effects = []
-  for (const range of ranges) {
-    if (foldLevelOf(range, ranges) === level) effects.push(foldEffect.of(range))
+  for (let index = 0; index < ordered.length; index += 1) {
+    if (levels[index] === level) effects.push(foldEffect.of(ordered[index]))
   }
   if (effects.length) {
     view.dispatch({ effects })
@@ -1453,7 +1612,7 @@ function foldLevel(view, level) {
   return false
 }
 
-function CodeEditor({ file, editing, wrap, onContext, onDirty, onSaveShortcut, onScroll, reveal, scrollTop, editorRef, highlightPreset }) {
+function CodeEditor({ file, editing, wrap, onContext, onDirty, onSaveShortcut, onScroll, reveal, scrollTop, editorRef, highlightPreset, searchPanelContainer, readEpoch, onRevealApplied }) {
   const host = useRef(null)
   const editableCompartment = useRef(new Compartment())
   const wrapCompartment = useRef(new Compartment())
@@ -1462,11 +1621,22 @@ function CodeEditor({ file, editing, wrap, onContext, onDirty, onSaveShortcut, o
   const saveRef = useRef(onSaveShortcut)
   const scrollRef = useRef(onScroll)
   const revealRef = useRef(null)
+  const onRevealAppliedRef = useRef(onRevealApplied)
+  const revealAppliedRef = useRef(null)
   contextRef.current = onContext
   dirtyRef.current = onDirty
   saveRef.current = onSaveShortcut
   scrollRef.current = onScroll
   revealRef.current = reveal
+  onRevealAppliedRef.current = onRevealApplied
+  // A reveal request is consumed the first time it is actually applied, so
+  // returning to the tab later restores the persisted scroll instead of
+  // re-jumping to a stale search match.
+  const markRevealApplied = (target) => {
+    if (target === null || revealAppliedRef.current === target) return
+    revealAppliedRef.current = target
+    onRevealAppliedRef.current?.()
+  }
 
   useEffect(() => {
     const descriptor = languageFor(file.name)
@@ -1482,10 +1652,50 @@ function CodeEditor({ file, editing, wrap, onContext, onDirty, onSaveShortcut, o
           lineNumbers(), highlightActiveLineGutter(), history(), foldGutter(), drawSelection(), dropCursor(),
           EditorState.allowMultipleSelections.of(true), indentOnInput(), bracketMatching(), closeBrackets(),
           highlightSelectionMatches(), highlightActiveLine(), syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+          /* The search panel is rendered into a container div between the
+             status bar and the preview body: top:true puts it in the top panel
+             group (the @codemirror/search default is bottom), and
+             panels({ topContainer }) places that group in the plugin-owned
+             container instead of inside the editor. */
+          search({ top: true }),
+          panels(searchPanelContainer?.current ? { topContainer: searchPanelContainer.current } : undefined),
+          /* CodeMirror's search/goto-line panels render their labels through
+             EditorState.phrase(); without this map they show English. The keys
+             mirror @codemirror/search's phrases; keep the $ placeholders. */
+          EditorState.phrases.of({
+            'Find': '查找',
+            'Replace': '替换为',
+            'next': '下一个',
+            'previous': '上一个',
+            'all': '全部',
+            'match case': '区分大小写',
+            'regexp': '正则',
+            'by word': '全字匹配',
+            'replace': '替换',
+            'replace all': '全部替换',
+            'close': '关闭',
+            'Go to line': '跳转到行',
+            'go': '跳转',
+            'current match': '当前匹配',
+            'on line': '行',
+            'replaced match on line $': '已在第 $ 行替换匹配',
+            'replaced $ matches': '已替换 $ 个匹配项',
+          }),
           syntaxHighlighting(tokenHighlight),
           keymap.of([
             { key: 'Mod-s', preventDefault: true, run: () => { saveRef.current(); return true } },
-            indentWithTab, ...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap,
+            indentWithTab, ...closeBracketsKeymap, ...defaultKeymap,
+            /* Search keys that only make sense inside the editor stay in the
+               keymap: Escape closes the panel; Ctrl+D / Ctrl+Shift+L /
+               Ctrl+Alt+G select occurrences, select matches, or jump to a line.
+               The find workflow (Ctrl/Cmd+F, Ctrl/Cmd+G, F3) is deliberately
+               NOT bound here — the window capture handler below owns it so it
+               works from every focus state (single path, same as Ctrl+K). */
+            { key: 'Escape', run: closeSearchPanel, scope: 'editor search-panel' },
+            { key: 'Mod-Shift-l', run: selectSelectionMatches },
+            { key: 'Mod-Alt-g', run: gotoLine },
+            { key: 'Mod-d', run: selectNextOccurrence, preventDefault: true },
+            ...historyKeymap, ...foldKeymap,
           ]),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) dirtyRef.current(update.state.sliceDoc())
@@ -1511,12 +1721,19 @@ function CodeEditor({ file, editing, wrap, onContext, onDirty, onSaveShortcut, o
     }
     view.scrollDOM.addEventListener('scroll', reportScroll)
     editorRef.current = view
+    // A reveal consumes itself (the parent clears the request), so the second
+    // pass must not fall through to the persisted scrollTop and undo the
+    // reveal; the closure flag scopes that to this mount pass.
+    let revealHandled = false
     const restoreScroll = () => {
       const target = revealRef.current
       if (target !== null && target.path === file.path) {
         revealPosition(view, target)
+        markRevealApplied(target)
+        revealHandled = true
         return
       }
+      if (revealHandled) return
       if (Number.isFinite(scrollTop) && scrollTop > 0) view.scrollDOM.scrollTop = scrollTop
     }
     restoreScroll()
@@ -1529,7 +1746,10 @@ function CodeEditor({ file, editing, wrap, onContext, onDirty, onSaveShortcut, o
       if (editorRef.current === view) editorRef.current = undefined
       view.destroy()
     }
-  }, [file.path, file.encoding, file.revision])
+    // Rebuild only when the document was actually re-read (path/encoding/read
+    // epoch), never on save: a save only advances the revision, and rebuilding
+    // would wipe the undo history and caret position.
+  }, [file.path, file.encoding, readEpoch])
 
   useEffect(() => {
     editorRef.current?.dispatch({
@@ -1550,6 +1770,7 @@ function CodeEditor({ file, editing, wrap, onContext, onDirty, onSaveShortcut, o
     const view = editorRef.current
     if (view === undefined || reveal === null) return
     revealPosition(view, reveal)
+    markRevealApplied(reveal)
   }, [reveal])
 
   // The Ctrl+K+J / Ctrl+K+<n> fold shortcuts are handled here at the window
@@ -1607,6 +1828,97 @@ function CodeEditor({ file, editing, wrap, onContext, onDirty, onSaveShortcut, o
     }
   }, [])
 
+  // The find shortcuts (Ctrl/Cmd+F, Ctrl/Cmd+G, Ctrl/Cmd+Shift+G, F3,
+  // Shift+F3) are handled here at the window level (capture phase) so they
+  // work in every focus state, exactly like Ctrl+K above: browsing keeps focus
+  // on the tree, toolbar, or tab bar. The editor keymap deliberately does not
+  // bind these keys — one handling path. With no editor mounted the keys are
+  // left untouched so the browser's own find still works.
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      const view = editorRef.current
+      if (view === undefined) return
+      const target = event.target
+      // Let text fields outside the editor (chat, rename, dialogs) keep their
+      // keys; the editor's own contenteditable and the search panel input
+      // (rendered into the search container) are treated as editor-internal,
+      // so they still reach this handler.
+      const panelContainer = searchPanelContainer?.current
+      const insideEditor = (host.current !== null && target instanceof Node && host.current.contains(target))
+        || (panelContainer !== null && target instanceof Node && panelContainer.contains(target))
+      if (!insideEditor && target instanceof HTMLElement && (target.isContentEditable || target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT')) return
+      const mod = (event.ctrlKey || event.metaKey) && !event.altKey
+      const key = String(event.key).toLowerCase()
+      const plainF3 = event.key === 'F3' && !event.ctrlKey && !event.metaKey && !event.altKey
+      let handled = false
+      if (key === 'f' && mod && !event.shiftKey) {
+        openSearchPanel(view)
+        handled = true
+      } else if (key === 'g' && mod && !event.shiftKey) {
+        findNext(view)
+        handled = true
+      } else if (key === 'g' && mod && event.shiftKey) {
+        findPrevious(view)
+        handled = true
+      } else if (plainF3 && !event.shiftKey) {
+        findNext(view)
+        handled = true
+      } else if (plainF3 && event.shiftKey) {
+        findPrevious(view)
+        handled = true
+      }
+      if (handled) {
+        event.preventDefault()
+        event.stopPropagation()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [])
+
+  // The search field gets a drag-to-resize grip on its right edge. CodeMirror
+  // builds the panel DOM itself and SearchPanel is not exported, so watch the
+  // panel container for the .cm-panel.cm-search element and wrap its
+  // [main-field] input in an inline-flex wrapper next to a col-resize handle
+  // (once per input; a fresh input is created each time the panel opens).
+  useEffect(() => {
+    const container = searchPanelContainer?.current
+    if (container === null || container === undefined) return undefined
+    const enhance = () => {
+      const input = container.querySelector('.cm-panel.cm-search [main-field]')
+      if (input === null || input.dataset.dshWelResize === '1') return
+      input.dataset.dshWelResize = '1'
+      const wrap = document.createElement('span')
+      wrap.className = 'dsh-wel-search-field-wrap'
+      const handle = document.createElement('span')
+      handle.className = 'dsh-wel-search-resize'
+      handle.title = '拖拽调整搜索框宽度'
+      input.before(wrap)
+      wrap.append(input, handle)
+      let startX = 0
+      let startWidth = 0
+      const onPointerDown = (event) => {
+        event.preventDefault()
+        startX = event.clientX
+        startWidth = input.getBoundingClientRect().width
+        const onPointerMove = (moveEvent) => {
+          input.style.width = `${Math.max(60, Math.min(480, startWidth + (moveEvent.clientX - startX)))}px`
+        }
+        const onPointerUp = () => {
+          window.removeEventListener('pointermove', onPointerMove)
+          window.removeEventListener('pointerup', onPointerUp)
+        }
+        window.addEventListener('pointermove', onPointerMove)
+        window.addEventListener('pointerup', onPointerUp)
+      }
+      handle.addEventListener('pointerdown', onPointerDown)
+    }
+    enhance()
+    const observer = new MutationObserver(enhance)
+    observer.observe(container, { childList: true, subtree: true })
+    return () => observer.disconnect()
+  }, [searchPanelContainer])
+
   return h('div', { className: 'dsh-wel-editor-host', 'data-highlight-preset': highlightPreset ?? HIGHLIGHT_PRESET_DEFAULT, ref: host })
 }
 
@@ -1631,12 +1943,18 @@ function WorkspaceExplorer({
   const [saving, setSaving] = useState(false)
   const [status, setStatus] = useState()
   const [reloadToken, setReloadToken] = useState(0)
+  // Bumped once per successful file re-read; the editor rebuilds on this
+  // instead of on the revision, so saving (which only advances the revision)
+  // keeps the undo history and caret position.
+  const [readEpoch, setReadEpoch] = useState(0)
   const [encodingMenu, setEncodingMenu] = useState()
   const [encodingDialog, setEncodingDialog] = useState()
   const [encodingPick, setEncodingPick] = useState('utf-8')
   const [encodingOptions, setEncodingOptions] = useState(ENCODING_FALLBACK)
   const [draggingPath, setDraggingPath] = useState(null)
   const [dropIndex, setDropIndex] = useState(null)
+  const [dropActive, setDropActive] = useState(false)
+  const [previewToast, setPreviewToast] = useState()
   const [entryDialog, setEntryDialog] = useState()
   const [entryDraft, setEntryDraft] = useState('')
   const [entryBusy, setEntryBusy] = useState(false)
@@ -1655,6 +1973,7 @@ function WorkspaceExplorer({
   const [searchQuery, setSearchQuery] = useState('')
   const [searchCaseSensitive, setSearchCaseSensitive] = useState(false)
   const [searchState, setSearchState] = useState({ state: 'idle' })
+  const [searchExpanded, setSearchExpanded] = useState(() => new Set())
   const [searchReveal, setSearchReveal] = useState()
   const searchController = useRef()
   const searchRevealToken = useRef(0)
@@ -1664,21 +1983,28 @@ function WorkspaceExplorer({
   const encodingMenuRef = useRef(null)
   const requestedEncodingRef = useRef()
   const previewTabsRef = useRef(null)
+  const previewSectionRef = useRef(null)
+  const dropSuppressedRef = useRef(false)
+  const toastSeqRef = useRef(0)
   const copyNoticeTimer = useRef()
   const requests = useRef(new Map())
   const readController = useRef()
   const saveController = useRef()
   const mutationController = useRef()
   const editorRef = useRef()
+  const searchPanelContainerRef = useRef(null)
   const composingRef = useRef(false)
   const baseText = useRef('')
   const diskBaseRef = useRef('')
   const mounted = useRef(true)
   const latestDraft = useRef(undefined)
-  const restoredDraft = useRef(storedDraft)
   const tabsRef = useRef(initialPreviewSession.tabs)
   const activePathRef = useRef(initialPreviewSession.activePath)
   const expandedRef = useRef(new Set(['', ...(initialPreviewSession.expanded ?? [])]))
+  // Live editor scroll positions: written on every scroll event without
+  // touching React state or the persistence path, merged into the snapshot
+  // only when it is actually serialized.
+  const scrollTopRef = useRef(new Map())
   const sessionEstablishedRef = useRef(false)
   const previewTabsBootstrapped = useRef(Boolean(initialPreviewSession.tabs.length > 0 || initialPreviewSession.activePath !== null))
   const selectedDirectoryPath = selectedLevelPath(selected)
@@ -1717,15 +2043,37 @@ function WorkspaceExplorer({
     // the store action), so collapsing everything back to root also persists.
     if (!meaningful && !sessionEstablishedRef.current) return
     if (meaningful) sessionEstablishedRef.current = true
-    persistPreviewSession(serializePreviewSession(activePathRef.current, tabsRef.current, expandedRef.current))
+    // Merge the live scroll positions (kept out of React state so scrolling
+    // never re-renders or triggers a write) into the serialized copy only.
+    const snapshotTabs = tabsRef.current.map(tab => {
+      const live = scrollTopRef.current.get(tab.path)
+      return live === undefined ? tab : { ...tab, scrollTop: live }
+    })
+    persistPreviewSession(serializePreviewSession(activePathRef.current, snapshotTabs, expandedRef.current))
   }, [persistPreviewSession])
-  // Persist synchronously at commit (before paint) so a pin and an immediate
-  // refresh cannot race the localStorage write; declared after the tabsRef sync
-  // effect so it always serializes the freshest tabs.
-  useLayoutEffect(() => { persistSessionTabs() }, [activePath, persistSessionTabs, tabs, expanded])
+  // Persist on a microtask after commit (still before paint) so a pin and an
+  // immediate refresh cannot race the localStorage write; the microtask
+  // coalesces burst updates (typing, tab drags) into one write per event-loop
+  // tick instead of one full 3-key store serialization per keystroke. Critical
+  // moments (unmount, pagehide/beforeunload) still flush synchronously below.
+  // Declared after the tabsRef sync effect so it always serializes the
+  // freshest tabs.
+  const persistPendingRef = useRef(false)
+  const schedulePersist = useCallback(() => {
+    if (persistPendingRef.current) return
+    persistPendingRef.current = true
+    queueMicrotask(() => {
+      persistPendingRef.current = false
+      persistSessionTabs()
+    })
+  }, [persistSessionTabs])
+  useLayoutEffect(() => { schedulePersist() }, [activePath, schedulePersist, tabs, expanded])
 
   const publishContextState = useCallback((state) => {
     if (activeTab === undefined || preview.state !== 'ready') return
+    // Dropped external files are read-only and not workspace-confined; never
+    // leak their synthetic path into the model's editor context.
+    if (activeTab.external) return
     const main = state.selection.main
     const text = state.sliceDoc()
     const selection = main.empty
@@ -1946,10 +2294,153 @@ function WorkspaceExplorer({
     setSelected(entry)
     revealPath(entry)
   }, [revealPath])
+  // Open a non-workspace file dropped into the preview pane: upload its raw
+  // bytes to the plugin endpoint, which decodes them into a read-only preview
+  // payload, then add a session-only external tab with that content. Resolves
+  // true on success and the failure message (to toast) when the file cannot be
+  // loaded as text.
+  const openExternalFile = useCallback(async (file, encoding) => {
+    try {
+      const bytes = await file.arrayBuffer()
+      const result = await uploadExternalFile(bytes, file.name, undefined, encoding)
+      if (!mounted.current) return true
+      const path = `external:${(typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
+      const tab = {
+        baseText: result.content,
+        bom: Boolean(result.bom),
+        dirty: false,
+        draft: result.content,
+        editing: false,
+        encoding: result.encoding ?? 'utf-8',
+        external: true,
+        lineEnding: result.lineEnding ?? 'none',
+        name: typeof result.name === 'string' && result.name !== '' ? result.name : file.name,
+        path,
+        pinned: false,
+        revision: null,
+        saving: false,
+        scrollTop: 0,
+        size: Number.isFinite(result.size) ? result.size : file.size,
+        status: undefined,
+        symlink: false,
+      }
+      previewTabsBootstrapped.current = true
+      setTabs(current => current.some(item => item.path === path) ? current : [...current, tab])
+      activatePath(path)
+      setStatus({ text: `已打开外部文件 ${tab.name}。` })
+      return true
+    } catch (error) {
+      if (error?.name === 'AbortError' || !mounted.current) return true
+      // The preview pane only responds to normal (text) files; a file that
+      // cannot be loaded as text (binary, image, empty, oversized) reports the
+      // server's message through the same toast surface the composer uses.
+      return error instanceof Error ? error.message : String(error)
+    }
+  }, [activatePath])
+  const showPreviewToast = useCallback((text) => {
+    toastSeqRef.current += 1
+    setPreviewToast({ seq: toastSeqRef.current, text })
+  }, [])
+  const handlePreviewDrop = useCallback(async (event) => {
+    setDropActive(false)
+    const files = Array.from(event.dataTransfer?.files ?? []).filter(file => !isImageFile(file))
+    if (files.length === 0) return
+    event.preventDefault()
+    const results = await Promise.allSettled(files.map(file => openExternalFile(file)))
+    if (!mounted.current) return
+    const ok = results.filter(result => result.status === 'fulfilled' && result.value === true).length
+    if (files.length > 1 && ok > 0) {
+      setStatus({ text: `已打开 ${ok} 个外部文件。` })
+    }
+    const failures = results
+      .filter(result => result.status === 'fulfilled' && typeof result.value === 'string' && result.value !== '')
+      .map(result => result.value)
+    if (failures.length > 0) {
+      showPreviewToast(files.length === 1
+        ? failures[0]
+        : `${failures.length} 个文件无法作为文本预览。`)
+    }
+  }, [openExternalFile, showPreviewToast])
+  // File drags are intercepted in the capture phase on the whole preview
+  // section: CodeMirror's own drop handler reads dataTransfer.files and would
+  // otherwise insert the file's text into the editor before this handler runs.
+  // Internal tab reorders carry no files, so they pass through untouched. The
+  // highlight only appears for normal (non-image) file drags — images are the
+  // chat composer's domain and are silently ignored here. Enter/leave use a
+  // depth counter because dragleave's relatedTarget is null in Chrome. Closing
+  // the hint suppresses it for the current drag until the drop or drag end.
+  useEffect(() => {
+    const section = previewSectionRef.current
+    if (section === null) return undefined
+    let depth = 0
+    const resetDrop = () => {
+      depth = 0
+      dropSuppressedRef.current = false
+      setDropActive(false)
+    }
+    const onDragEnter = (event) => {
+      if (!hasDraggedFiles(event)) return
+      // Suppress the harness chat drop mask over the preview regardless of file
+      // kind, so each area keeps its own response.
+      event.preventDefault()
+      event.stopPropagation()
+      if (dropSuppressedRef.current) return
+      if (hasNormalFile(event)) {
+        depth += 1
+        if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+        setDropActive(true)
+      } else if (event.dataTransfer) {
+        // Image-only drag: the preview does not accept it, so signal "no drop"
+        // (the browser then refuses the drop and nothing happens at all).
+        event.dataTransfer.dropEffect = 'none'
+      }
+    }
+    const onDragOver = (event) => {
+      if (!hasDraggedFiles(event)) return
+      event.preventDefault()
+      event.stopPropagation()
+      if (dropSuppressedRef.current) return
+      if (hasNormalFile(event)) {
+        if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+        if (depth === 0) depth = 1
+        setDropActive(true)
+      } else if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = 'none'
+      }
+    }
+    const onDragLeave = (event) => {
+      if (!hasDraggedFiles(event)) return
+      if (dropSuppressedRef.current) return
+      depth = Math.max(0, depth - 1)
+      if (depth === 0) setDropActive(false)
+    }
+    const onDrop = (event) => {
+      if (!hasDraggedFiles(event)) return
+      event.preventDefault()
+      event.stopPropagation()
+      resetDrop()
+      void handlePreviewDrop(event)
+    }
+    const onDragEnd = () => { resetDrop() }
+    section.addEventListener('dragenter', onDragEnter, true)
+    section.addEventListener('dragover', onDragOver, true)
+    section.addEventListener('drop', onDrop, true)
+    section.addEventListener('dragleave', onDragLeave, true)
+    window.addEventListener('dragend', onDragEnd)
+    return () => {
+      section.removeEventListener('dragenter', onDragEnter, true)
+      section.removeEventListener('dragover', onDragOver, true)
+      section.removeEventListener('drop', onDrop, true)
+      section.removeEventListener('dragleave', onDragLeave, true)
+      window.removeEventListener('dragend', onDragEnd)
+    }
+  }, [handlePreviewDrop])
   const openEntryDialog = useCallback(kind => { setEntryDialog({ mode: 'create', kind, parentPath: selectedDirectoryPath }); setEntryDraft(defaultEntryName(kind)); setEntryError(undefined); composingRef.current=false }, [selectedDirectoryPath])
   const beginRename = useCallback(entry => { if(entry.kind==='blocked'||entry.kind==='other')return;if(dirty&&activePath===entry.path){setStatus({error:true,text:'当前文件有未保存的更改，请先保存或取消编辑。'});return}setEntryDialog({mode:'rename',entry});setEntryDraft(entry.name);setEntryError(undefined);composingRef.current=false }, [activePath, dirty])
   const closeEntryDialog=useCallback(()=>{if(entryBusy)return;setEntryDialog(undefined);setEntryDraft('');setEntryError(undefined);composingRef.current=false},[entryBusy])
-  const submitEntryDialog=useCallback(()=>{if(entryBusy||entryDialog===undefined)return;const trimmed=entryDraft.trim();const message=entryNameError(entryDraft);if(message!==undefined){setEntryError(message);return}const parentPathValue=entryDialog.mode==='create'?entryDialog.parentPath:parentPath(entryDialog.entry.path);const siblings=directories.get(parentPathValue)?.entries??[];if(entryDialog.mode==='create'){if(siblings.some(entry=>entry.name===trimmed)){setEntryError('同级目录中已存在同名条目');return}}else if(trimmed===entryDialog.entry.name||siblings.some(entry=>entry.name===trimmed&&entry.path!==entryDialog.entry.path)){setEntryError(trimmed===entryDialog.entry.name?'名称没有变化':'同级目录中已存在同名条目');return}const controller=new AbortController();mutationController.current?.abort();mutationController.current=controller;setEntryBusy(true);setEntryError(undefined);const request=entryDialog.mode==='create'?createEntry(workspace.workspaceId,entryDialog.parentPath,entryDialog.kind,trimmed,controller.signal):renameEntry(workspace.workspaceId,entryDialog.entry.path,trimmed,controller.signal);request.then(result=>{if(!mounted.current)return;const mode=entryDialog.mode;const sourcePath=mode==='create'?entryDialog.parentPath:entryDialog.entry.path;const nextStatus=mode==='create'?result.kind==='directory'?'已新建文件夹。':'已新建文件。':result.kind==='directory'?'已重命名文件夹。':'已重命名文件。';composingRef.current=false;setEntryBusy(false);setEntryDialog(undefined);setEntryDraft('');setEntryError(undefined);setStatus({text:nextStatus});if(mode==='create'){setExpanded(cur=>{const next=new Set(cur);next.add(sourcePath);if(result.kind==='directory')next.add(result.path);return next});if(result.kind==='file'){previewTabsBootstrapped.current = true;setTabs(cur=>cur.some(tab=>tab.path===result.path)?cur:[...cur,{baseText:'',dirty:false,draft:'',editing:false,name:result.name,path:result.path,pinned:false,saving:false,scrollTop:0,size:null,status:undefined,symlink:Boolean(result.symlink),bom:false,lineEnding:'none',revision:null}]);activatePath(result.path)}setSelected(result);void loadDirectory(sourcePath);if(result.kind==='directory')void loadDirectory(result.path)}else{setDirectories(cur=>rewriteDirectoryMap(cur,sourcePath,result.path,result));setExpanded(cur=>rewritePathSet(cur,sourcePath,result.path));setTabs(cur=>rewritePreviewTabs(cur,sourcePath,result.path,result));{const nextActivePath=activePathRef.current===null?null:rewriteRelativePath(activePathRef.current,sourcePath,result.path);if(nextActivePath!==activePathRef.current)setActivePath(nextActivePath)}setSelected(result);void loadDirectory(parentPath(sourcePath))}}).catch(error=>{if(error?.name==='AbortError'||!mounted.current){return}setEntryBusy(false);setEntryError(error instanceof Error?error.message:String(error))}).finally(()=>{if(mutationController.current===controller)mutationController.current=undefined;if(mounted.current)setEntryBusy(false)})},[createEntry,dirty,directories,entryBusy,entryDialog,entryDraft,loadDirectory,renameEntry,selected,workspace.workspaceId])
+  const submitEntryDialog=useCallback(()=>{if(entryBusy||entryDialog===undefined)return;const trimmed=entryDraft.trim();const message=entryNameError(entryDraft);if(message!==undefined){setEntryError(message);return}const parentPathValue=entryDialog.mode==='create'?entryDialog.parentPath:parentPath(entryDialog.entry.path);const siblings=directories.get(parentPathValue)?.entries??[];if(entryDialog.mode==='create'){if(siblings.some(entry=>entry.name===trimmed)){setEntryError('同级目录中已存在同名条目');return}}else if(trimmed===entryDialog.entry.name||siblings.some(entry=>entry.name===trimmed&&entry.path!==entryDialog.entry.path)){setEntryError(trimmed===entryDialog.entry.name?'名称没有变化':'同级目录中已存在同名条目');return}const controller=new AbortController();mutationController.current?.abort();mutationController.current=controller;setEntryBusy(true);setEntryError(undefined);const request=entryDialog.mode==='create'?createEntry(workspace.workspaceId,entryDialog.parentPath,entryDialog.kind,trimmed,controller.signal):renameEntry(workspace.workspaceId,entryDialog.entry.path,trimmed,controller.signal);request.then(result=>{if(!mounted.current)return;const mode=entryDialog.mode;const sourcePath=mode==='create'?entryDialog.parentPath:entryDialog.entry.path;const nextStatus=mode==='create'?result.kind==='directory'?'已新建文件夹。':'已新建文件。':result.kind==='directory'?'已重命名文件夹。':'已重命名文件。';composingRef.current=false;setEntryBusy(false);setEntryDialog(undefined);setEntryDraft('');setEntryError(undefined);setStatus({text:nextStatus});if(mode==='create'){setExpanded(cur=>{const next=new Set(cur);next.add(sourcePath);if(result.kind==='directory')next.add(result.path);return next});if(result.kind==='file'){previewTabsBootstrapped.current = true;setTabs(cur=>cur.some(tab=>tab.path===result.path)?cur:[...cur,{baseText:'',dirty:false,draft:'',editing:false,name:result.name,path:result.path,pinned:false,saving:false,scrollTop:0,size:null,status:undefined,symlink:Boolean(result.symlink),bom:false,lineEnding:'none',revision:null}]);activatePath(result.path)}setSelected(result);void loadDirectory(sourcePath);if(result.kind==='directory')void loadDirectory(result.path)}else{setDirectories(cur=>rewriteDirectoryMap(cur,sourcePath,result.path,result));setExpanded(cur=>rewritePathSet(cur,sourcePath,result.path));setTabs(cur=>rewritePreviewTabs(cur,sourcePath,result.path,result));{const nextActivePath=activePathRef.current===null?null:rewriteRelativePath(activePathRef.current,sourcePath,result.path);if(nextActivePath!==activePathRef.current)setActivePath(nextActivePath)}setSelected(result);void loadDirectory(parentPath(sourcePath))}}).catch(error=>{if(error?.name==='AbortError'||!mounted.current){return}setEntryBusy(false);setEntryError(error instanceof Error?error.message:String(error))}).finally(()=>{if(mutationController.current===controller)mutationController.current=undefined;if(mounted.current)setEntryBusy(false)})},[createEntry,directories,entryBusy,entryDialog,entryDraft,loadDirectory,renameEntry,workspace.workspaceId])
   useLayoutEffect(() => {
     if (activePath === null) {
       publishEditorContext(undefined)
@@ -1960,6 +2451,39 @@ function WorkspaceExplorer({
       setDraft('')
       setStatus(undefined)
       baseText.current = ''
+      return undefined
+    }
+    // External (dropped) files carry their decoded content in the tab already:
+    // there is no workspace path to re-read and no encoding re-open, so build
+    // the read-only preview synchronously and never hit the workspace API.
+    const externalTab = tabsRef.current.find(item => item.path === activePath && item.external)
+    if (externalTab !== undefined) {
+      readController.current?.abort()
+      publishEditorContext(undefined)
+      const selection = { kind: 'file', name: externalTab.name, path: activePath, symlink: false, external: true }
+      setSelected(selection)
+      setEditing(false)
+      setDirty(false)
+      setSaving(false)
+      setStatus(undefined)
+      const ready = {
+        state: 'ready',
+        content: externalTab.baseText,
+        path: activePath,
+        name: externalTab.name,
+        symlink: false,
+        truncated: false,
+        encoding: externalTab.encoding ?? 'utf-8',
+        lineEnding: externalTab.lineEnding ?? 'none',
+        bom: Boolean(externalTab.bom),
+        size: Number.isFinite(externalTab.size) ? externalTab.size : null,
+        editable: false,
+        readOnlyReason: 'external-file',
+      }
+      diskBaseRef.current = externalTab.baseText
+      baseText.current = externalTab.baseText
+      setDraft(externalTab.baseText)
+      setPreview(ready)
       return undefined
     }
     readController.current?.abort()
@@ -2002,6 +2526,10 @@ function WorkspaceExplorer({
     setStatus(tab?.status)
     setPreview({ state: 'loading', path: activePath })
     readFile(workspace.workspaceId, activePath, controller.signal, effectiveEncoding).then((result) => {
+      // The tab may have been switched since the read started (abort covers
+      // most cases; a fetch that already resolved is caught here). Applying a
+      // stale result would flash the wrong file and bump the read epoch.
+      if (!mounted.current || activePathRef.current !== activePath) return
       requestedEncodingRef.current = undefined
       const stored = tab?.dirty ? tab : undefined
       const canRestore = stored !== undefined
@@ -2009,7 +2537,11 @@ function WorkspaceExplorer({
         && !result.readOnlyReason
         && !result.truncated
         && result.lineEnding !== 'mixed'
-      const content = canRestore ? stored.draft : result.content
+      // A draft that cannot be restored (file became read-only, oversized,
+      // truncated, mixed line endings) is still shown: it is the user's only
+      // copy of their unsaved work. It is marked clean so the tab stays
+      // closable — the draft cannot be saved anyway — and the status says so.
+      const content = stored !== undefined ? stored.draft : result.content
       const ready = {
         state: 'ready',
         ...result,
@@ -2026,6 +2558,9 @@ function WorkspaceExplorer({
       const restoredStatus = canRestore && stored.revision !== null && stored.revision !== undefined && result.revision !== stored.revision
         ? { error: true, text: '磁盘文件已在草稿保存后更改。草稿已恢复，保存时将检查冲突。' }
         : { text: '已恢复此工作区中未保存的草稿。' }
+      const notRestorableStatus = stored !== undefined
+        ? { error: true, text: '检测到未保存草稿，但文件当前不可编辑。草稿内容已展示；关闭标签或刷新后将丢弃，无法保存。' }
+        : undefined
       // The disk content (as last read) stays separate from the editing
       // baseline: cancel restores the disk truth even when a draft restore
       // happened with a stale base.
@@ -2033,24 +2568,22 @@ function WorkspaceExplorer({
       baseText.current = canRestore ? stored.baseText : result.content
       setDraft(content)
       setPreview(ready)
-      setEditing(canRestore ? true : Boolean(tab?.editing))
-      setDirty(canRestore ? true : Boolean(tab?.dirty))
+      setEditing(canRestore ? true : (stored !== undefined ? false : Boolean(tab?.editing)))
+      setDirty(canRestore ? true : (stored !== undefined ? false : Boolean(tab?.dirty)))
       if (canRestore) {
         setStatus(restoredStatus)
-        if (storedDraft?.path === activePath) restoredDraft.current = undefined
         if (storedDraft?.path === activePath) clearDraft()
-      } else if (storedDraft?.path === activePath) {
-        setStatus({
-          error: true,
-          text: `检测到未保存草稿，但${readOnlyReason(result)}。草稿仍保留在当前页面内存中。`,
-        })
+      } else if (stored !== undefined) {
+        setStatus(notRestorableStatus)
+        if (storedDraft?.path === activePath) clearDraft()
       }
+      setReadEpoch(epoch => epoch + 1)
       updateTab(activePath, {
         baseText: canRestore ? stored.baseText : result.content,
         bom: Boolean(result.bom),
-        dirty: canRestore ? true : Boolean(tab?.dirty),
+        dirty: canRestore ? true : (stored !== undefined ? false : Boolean(tab?.dirty)),
         draft: content,
-        editing: canRestore ? true : Boolean(tab?.editing),
+        editing: canRestore ? true : (stored !== undefined ? false : Boolean(tab?.editing)),
         encoding: result.encoding ?? effectiveEncoding,
         lineEnding: result.lineEnding ?? 'none',
         name: selection.name,
@@ -2058,11 +2591,11 @@ function WorkspaceExplorer({
         saving: false,
         scrollTop: tab?.scrollTop ?? 0,
         size: Number.isFinite(result.size) ? result.size : null,
-        status: canRestore ? restoredStatus : tab?.status,
+        status: canRestore ? restoredStatus : (stored !== undefined ? notRestorableStatus : tab?.status),
         symlink: Boolean(selection.symlink),
       })
     }, (error) => {
-      if (error?.name !== 'AbortError') {
+      if (error?.name !== 'AbortError' && activePathRef.current === activePath) {
         const message = error instanceof Error ? error.message : String(error)
         setPreview({ state: 'error', path: activePath, message })
         updateTab(activePath, { saving: false, status: { error: true, text: message } })
@@ -2154,13 +2687,15 @@ function WorkspaceExplorer({
   const toggleDirectory=useCallback(entry=>{const path=entry.path;const opening=!expanded.has(path);setExpanded(cur=>{const next=new Set(cur);opening?next.add(path):next.delete(path);return next});if(opening){if(directories.get(path)?.state!=='ready')void loadDirectory(path);chooseDirectory(entry)}else setSelected(entry)},[chooseDirectory,directories,expanded,loadDirectory])
   const openContextMenu=useCallback((event,entry)=>{event.preventDefault();setSelected(entry);setContextMenu({entry,x:event.clientX,y:event.clientY})},[])
   const copyEntryPath=useCallback((entry,relative)=>{const value=relative?entry.path:joinAbsolutePath(workspace.path,entry.path);void copyText(value).then(ok=>{if(!mounted.current)return;setContextMenu(undefined);setCopyNotice(ok?(relative?'已复制相对路径。':'已复制完整路径。'):'复制失败。');clearTimeout(copyNoticeTimer.current);copyNoticeTimer.current=setTimeout(()=>{if(mounted.current)setCopyNotice(undefined)},1600)})},[workspace.path])
+  const copyEntryName=useCallback((entry)=>{void copyText(entry.name).then(ok=>{if(!mounted.current)return;setContextMenu(undefined);setCopyNotice(ok?'已复制名称。':'复制失败。');clearTimeout(copyNoticeTimer.current);copyNoticeTimer.current=setTimeout(()=>{if(mounted.current)setCopyNotice(undefined)},1600)})},[])
   const openInExplorer=useCallback((entry)=>{setContextMenu(undefined);const controller=new AbortController();revealInExplorer(workspace.workspaceId,entry.path,controller.signal).then(()=>{if(!mounted.current)return;setCopyNotice('已在资源管理器中打开。');clearTimeout(copyNoticeTimer.current);copyNoticeTimer.current=setTimeout(()=>{if(mounted.current)setCopyNotice(undefined)},1600)}).catch(error=>{if(!mounted.current||error?.name==='AbortError')return;setCopyNotice(`打开失败：${error instanceof Error?error.message:String(error)}`);clearTimeout(copyNoticeTimer.current);copyNoticeTimer.current=setTimeout(()=>{if(mounted.current)setCopyNotice(undefined)},3000)})},[workspace.workspaceId])
   const openSessionRename=useCallback(()=>{setTitleContextMenu(undefined);setSessionRenameDraft(sessionTitle ?? '');setSessionRenameError(undefined);setSessionRenameOpen(true)},[sessionTitle])
   const closeSessionRename=useCallback(()=>{if(sessionRenameBusy)return;setSessionRenameOpen(false);setSessionRenameDraft('');setSessionRenameError(undefined)},[sessionRenameBusy])
   const confirmSessionRename=useCallback(()=>{if(sessionRenameBusy||sessionId===undefined)return;const trimmed=sessionRenameDraft.trim();if(trimmed==='')return;setSessionRenameBusy(true);setSessionRenameError(undefined);renameSession(String(sessionId),trimmed).then(()=>{if(!mounted.current)return;setSessionRenameBusy(false);setSessionRenameOpen(false);setSessionRenameDraft('')}).catch(error=>{if(!mounted.current)return;setSessionRenameBusy(false);setSessionRenameError(error instanceof Error?error.message:String(error))})},[renameSession,sessionId,sessionRenameBusy,sessionRenameDraft])
-  const runSearch=useCallback(async(query)=>{searchController.current?.abort();if(query.trim()===''){setSearchState({state:'idle'});return}const controller=new AbortController();searchController.current=controller;setSearchState({state:'searching'});try{const result=await requestSearch(workspace.workspaceId,query,searchCaseSensitive,controller.signal);if(searchController.current===controller)setSearchState({state:'done',result})}catch(error){if(error?.name==='AbortError')return;if(searchController.current===controller)setSearchState({state:'error',message:error instanceof Error?error.message:String(error)})}},[searchCaseSensitive,workspace.workspaceId])
-  const closeSearch=useCallback(()=>{searchController.current?.abort();searchController.current=undefined;setSearchOpen(false)},[])
+  const runSearch=useCallback(async(query)=>{searchController.current?.abort();if(query.trim()===''){setSearchState({state:'idle'});setSearchExpanded(new Set());return}const controller=new AbortController();searchController.current=controller;setSearchState({state:'searching'});try{const result=await requestSearch(workspace.workspaceId,query,searchCaseSensitive,controller.signal);if(searchController.current===controller){setSearchState({state:'done',result});setSearchExpanded(new Set((settings.expandSearchMatches ?? SEARCH_MATCH_EXPAND_DEFAULT)?result.files.map(file=>file.path):[]))}}catch(error){if(error?.name==='AbortError')return;if(searchController.current===controller)setSearchState({state:'error',message:error instanceof Error?error.message:String(error)})}},[searchCaseSensitive,settings.expandSearchMatches,workspace.workspaceId])
+  const closeSearch=useCallback(()=>{searchController.current?.abort();searchController.current=undefined;setSearchExpanded(new Set());setSearchOpen(false)},[])
   const openSearchMatch=useCallback((file,match)=>{const entry={kind:'file',name:file.name,path:file.path,symlink:false};chooseFile(entry);searchRevealToken.current+=1;setSearchReveal({endColumn:match.endColumn,column:match.startColumn,line:match.line,path:file.path,token:searchRevealToken.current})},[chooseFile])
+  const toggleSearchFile=useCallback((path)=>{setSearchExpanded(prev=>{const next=new Set(prev);if(next.has(path))next.delete(path);else next.add(path);return next})},[])
   useEffect(()=>{if(!searchOpen)return undefined;const timer=setTimeout(()=>{void runSearch(searchQuery)},300);return()=>clearTimeout(timer)},[runSearch,searchOpen,searchQuery])
   useEffect(()=>{if(contextMenu===undefined)return undefined;const inside=event=>{const node=menuRef.current;return node!==null&&event.target instanceof Node&&node.contains(event.target)};const close=()=>setContextMenu(undefined);const onPointerDown=event=>{if(!inside(event))close()};const onContextMenu=event=>{if(!inside(event))close()};const onKeyDown=event=>{if(event.key==='Escape')close()};window.addEventListener('pointerdown',onPointerDown);window.addEventListener('contextmenu',onContextMenu,true);window.addEventListener('keydown',onKeyDown);window.addEventListener('resize',close);window.addEventListener('scroll',close,true);return()=>{window.removeEventListener('pointerdown',onPointerDown);window.removeEventListener('contextmenu',onContextMenu,true);window.removeEventListener('keydown',onKeyDown);window.removeEventListener('resize',close);window.removeEventListener('scroll',close,true)}},[contextMenu])
   useEffect(()=>{if(tabContextMenu===undefined)return undefined;const inside=event=>{const node=tabMenuRef.current;return node!==null&&event.target instanceof Node&&node.contains(event.target)};const close=()=>setTabContextMenu(undefined);const onPointerDown=event=>{if(!inside(event))close()};const onContextMenu=event=>{if(!inside(event))close()};const onKeyDown=event=>{if(event.key==='Escape')close()};window.addEventListener('pointerdown',onPointerDown);window.addEventListener('contextmenu',onContextMenu,true);window.addEventListener('keydown',onKeyDown);window.addEventListener('resize',close);window.addEventListener('scroll',close,true);return()=>{window.removeEventListener('pointerdown',onPointerDown);window.removeEventListener('contextmenu',onContextMenu,true);window.removeEventListener('keydown',onKeyDown);window.removeEventListener('resize',close);window.removeEventListener('scroll',close,true)}},[tabContextMenu])
@@ -2379,13 +2914,17 @@ function WorkspaceExplorer({
     body = h(Fragment, null,
       preview.truncated ? h('div', { className: 'dsh-wel-banner' }, '文件较大，当前仅显示开头部分，不能编辑。') : null,
       status ? h('div', { className: 'dsh-wel-status', 'data-error': status.error || undefined }, status.text) : null,
+      h('div', { className: 'dsh-wel-preview-search', ref: searchPanelContainerRef, onContextMenu: (event) => { if (event.button !== 2) event.preventDefault() } }),
       h('div', { className: 'dsh-wel-preview-body', onClick: () => { if (activePathRef.current !== null) scrollTabIntoView(activePathRef.current) } },
         h(CodeEditor, {
-          key: `${preview.path}:${preview.encoding}:${String(preview.revision ?? '')}`,
+          key: `${preview.path}:${preview.encoding}:${readEpoch}`,
           editorRef,
           editing,
           file: preview,
           highlightPreset,
+          onRevealApplied: () => setSearchReveal(undefined),
+          readEpoch,
+          searchPanelContainer: searchPanelContainerRef,
           wrap: settings.wrap === true,
           onContext: publishContextState,
           onDirty: (text) => {
@@ -2395,11 +2934,11 @@ function WorkspaceExplorer({
             updateActiveTab({ dirty: nextDirty, draft: text })
           },
           onSaveShortcut: () => { if (editing && !saving) void save() },
-          onScroll: (path, scrollTop) => { updateTab(path, { scrollTop }) },
+          onScroll: (path, scrollTop) => { scrollTopRef.current.set(path, scrollTop) },
           reveal: searchReveal !== undefined && preview.state === 'ready' && activeTab !== undefined && searchReveal.path === activeTab.path
             ? searchReveal
             : null,
-          scrollTop: activeTab?.scrollTop ?? 0,
+          scrollTop: scrollTopRef.current.get(activePath) ?? activeTab?.scrollTop ?? 0,
         })))
   }
   let searchBody
@@ -2419,32 +2958,37 @@ function WorkspaceExplorer({
     searchBody = h(Fragment, null,
       h('div', { className: 'dsh-wel-search-summary' },
         `${searchState.result.matchCount} 个匹配项 · ${searchState.result.fileCount} 个文件${searchState.result.truncated ? '（结果过多，仅显示部分）' : ''}`),
-      searchState.result.files.map(file => h('div', { className: 'dsh-wel-search-file', key: file.path },
-        h('button', {
-          className: 'dsh-wel-search-file-header',
-          onClick: () => openSearchMatch(file, file.matches[0]),
-          title: file.path,
-          type: 'button',
-        },
-          h('span', { className: 'dsh-wel-row-name' }, file.path),
-          file.truncated ? h('span', { className: 'dsh-wel-search-truncated', title: '文件较大，仅搜索了开头部分' }, '部分') : null,
-          h('span', { className: 'dsh-wel-search-file-count' }, `${file.matches.length}`),
-        ),
-        file.matches.map(match => h('button', {
-          className: 'dsh-wel-search-row',
-          key: `${match.line}:${match.startColumn}`,
-          onClick: () => openSearchMatch(file, match),
-          title: `${file.path} · 第 ${match.line} 行`,
-          type: 'button',
-        },
-          h('span', { className: 'dsh-wel-search-line' }, String(match.line)),
-          h('span', { className: 'dsh-wel-search-text' },
-            match.text.slice(0, match.startColumn - 1),
-            h('span', { className: 'dsh-wel-search-hit' }, match.text.slice(match.startColumn - 1, match.endColumn - 1)),
-            match.text.slice(match.endColumn - 1),
+      searchState.result.files.map(file => {
+        const expanded = searchExpanded.has(file.path)
+        return h('div', { className: 'dsh-wel-search-file', key: file.path },
+          h('button', {
+            'aria-expanded': expanded,
+            className: 'dsh-wel-search-file-header',
+            onClick: () => toggleSearchFile(file.path),
+            title: file.path,
+            type: 'button',
+          },
+            h('span', { className: 'dsh-wel-chevron' }, expanded ? '▼' : '▶'),
+            h('span', { className: 'dsh-wel-row-name' }, file.path),
+            file.truncated ? h('span', { className: 'dsh-wel-search-truncated', title: '文件较大，仅搜索了开头部分' }, '部分') : null,
+            h('span', { className: 'dsh-wel-search-file-count' }, `${file.matches.length}`),
           ),
-        )),
-      )),
+          expanded ? file.matches.map(match => h('button', {
+            className: 'dsh-wel-search-row',
+            key: `${match.line}:${match.startColumn}`,
+            onClick: () => openSearchMatch(file, match),
+            title: `${file.path} · 第 ${match.line} 行`,
+            type: 'button',
+          },
+            h('span', { className: 'dsh-wel-search-line' }, String(match.line)),
+            h('span', { className: 'dsh-wel-search-text' },
+              match.text.slice(0, match.startColumn - 1),
+              h('span', { className: 'dsh-wel-search-hit' }, match.text.slice(match.startColumn - 1, match.endColumn - 1)),
+              match.text.slice(match.endColumn - 1),
+            ),
+          )) : null,
+        )
+      }),
     )
   }
   const entryDialogTrimmed = entryDraft.trim()
@@ -2525,7 +3069,7 @@ function WorkspaceExplorer({
                 onChange: e => setSearchQuery(e.target.value),
                 onKeyDown: e => {
                   if (e.key === 'Enter') { e.preventDefault(); void runSearch(searchQuery) }
-                  else if (e.key === 'Escape') { e.preventDefault(); setSearchQuery(''); setSearchState({ state: 'idle' }) }
+                  else if (e.key === 'Escape') { e.preventDefault(); closeSearch() }
                 },
                 placeholder: '搜索工作区内容',
                 spellCheck: false,
@@ -2564,7 +3108,7 @@ function WorkspaceExplorer({
             title: sessionTitle ?? '工作区文件',
           }),
           h('div', { className: 'dsh-wel-tree-scroll' }, renderDirectory('', 0)),
-          contextMenu ? h(TreeContextMenu, { entry: contextMenu.entry, menuRef, onCopyPath: copyEntryPath, onReveal: openInExplorer, x: contextMenu.x, y: contextMenu.y }) : null,
+          contextMenu ? h(TreeContextMenu, { entry: contextMenu.entry, menuRef, onCopyName: copyEntryName, onCopyPath: copyEntryPath, onReveal: openInExplorer, x: contextMenu.x, y: contextMenu.y }) : null,
           titleContextMenu ? h('div', { className: 'dsh-wel-context-menu', ref: titleMenuRef, role: 'menu', style: { left: Math.max(4, Math.min(titleContextMenu.x, window.innerWidth - CONTEXT_MENU_WIDTH - 4)), top: Math.max(4, Math.min(titleContextMenu.y, window.innerHeight - 52)) } }, h('button', { className: 'dsh-wel-context-item', onClick: openSessionRename, role: 'menuitem', title: '重命名当前会话', type: 'button' }, '重命名当前会话')) : null,
           copyNotice ? h('div', { className: 'dsh-wel-copy-notice', role: 'status' }, copyNotice) : null,
         ),
@@ -2592,14 +3136,18 @@ function WorkspaceExplorer({
       onDraft: value => { setSessionRenameDraft(value); setSessionRenameError(undefined) },
     }) : null,
     treePortalTarget ? createPortal(treeSection, treePortalTarget) : null,
-    h('section', { className: 'dsh-wel-preview' },
+    h('section', { 'data-drop-active': dropActive || undefined, className: 'dsh-wel-preview', ref: previewSectionRef },
       tabs.length ? h('div', { ref: previewTabsRef, className: 'dsh-wel-preview-tabs', role: 'tablist', 'aria-label': '文件预览标签', onDragLeave: handleTabsDragLeave, onDragOver: updateDropIndex, onDrop: handleTabsDrop }, previewTabNodes) : null,
       tabContextMenu ? h(TabContextMenu, { menuRef: tabMenuRef, onCloseOthers: () => { setTabContextMenu(undefined); closeOtherTabs(tabContextMenu.path) }, onTogglePin: () => { setTabContextMenu(undefined); if (tabMenuTarget?.pinned) unpinTab(tabContextMenu.path); else pinTab(tabContextMenu.path) }, pinned: Boolean(tabMenuTarget?.pinned), x: tabContextMenu.x, y: tabContextMenu.y }) : null,
-      h('header', { className: 'dsh-wel-panel-header', onContextMenu: (event) => { event.preventDefault(); if (preview.state === 'ready' && activeTab !== undefined) setEncodingMenu({ x: event.clientX, y: event.clientY }) } },
+      h('header', { className: 'dsh-wel-panel-header', onContextMenu: (event) => { event.preventDefault(); if (preview.state === 'ready' && activeTab !== undefined && !activeTab.external) setEncodingMenu({ x: event.clientX, y: event.clientY }) } },
         h('div', { className: 'dsh-wel-panel-title' },
-          h('strong', { title: activeTab?.path ?? '文件预览' }, activeTab?.name ?? '文件预览'),
+          h('strong', { title: activeTab?.external ? activeTab.name : (activeTab?.path ?? '文件预览') }, activeTab?.name ?? '文件预览'),
           h('div', { className: 'dsh-wel-preview-header-meta' },
-            activeTab ? h('span', { title: activeTab.path }, activeTab.path) : h('span', null, workspace.title),
+            activeTab
+              ? (activeTab.external
+                  ? h('span', { title: '外部文件（拖入）' }, `外部文件 · ${activeTab.name}`)
+                  : h('span', { title: activeTab.path }, activeTab.path))
+              : h('span', null, workspace.title),
             activeTab ? h('span', { className: 'dsh-wel-language' }, fileLabel(activeTab.name)) : null,
             size ? h('span', null, size) : null,
             preview.state === 'ready' && preview.encoding ? h('span', { className: 'dsh-wel-encoding', title: '文件编码' }, encodingLabel(preview.encoding)) : null,
@@ -2626,6 +3174,10 @@ function WorkspaceExplorer({
           : null,
       ),
       body,
+      dropActive ? h('div', { className: 'dsh-wel-drop-overlay', role: 'presentation' },
+        h('button', { 'aria-label': '关闭拖放提示', className: 'dsh-wel-drop-close', onClick: () => { dropSuppressedRef.current = true; setDropActive(false) }, title: '关闭', type: 'button' }, '×'),
+        h('div', { className: 'dsh-wel-drop-hint' }, '松开以打开外部文件')) : null,
+      previewToast ? h(PreviewToast, { key: previewToast.seq, onDone: () => setPreviewToast(undefined), text: previewToast.text }) : null,
     ),
   )
 }
@@ -2680,6 +3232,17 @@ function EmptyWorkspaceExplorer({ treePortalTarget, sessionTitle }) {
         type: 'button',
       }, '恢复大小默认')),
     h('div', { className: 'dsh-wel-explorer-divider' }),
+    h('div', { className: 'dsh-wel-settings-row' },
+      h('label', { className: 'dsh-wel-settings-label', htmlFor: 'dsh-wel-search-expand-default' }, '搜索结果显示'),
+      h('select', {
+        'aria-label': '搜索结果显示',
+        className: 'dsh-wel-highlight-preset-select',
+        id: 'dsh-wel-search-expand-default',
+        onChange: e => settingsStore.actions.setExpandSearchMatches(e.target.value === 'expanded'),
+        value: (settings.expandSearchMatches ?? SEARCH_MATCH_EXPAND_DEFAULT) ? 'expanded' : 'collapsed',
+      },
+        h('option', { value: 'expanded' }, '默认展开'),
+        h('option', { value: 'collapsed' }, '默认折叠'))),
     h('div', { className: 'dsh-wel-file-colors-title' }, '文件图标颜色'),
     h('div', { className: 'dsh-wel-file-colors' },
       FILE_COLOR_GROUPS.map(({ group, label }) => h('div', { className: 'dsh-wel-file-color-row', key: group },
@@ -2733,7 +3296,7 @@ function EmptyWorkspaceExplorer({ treePortalTarget, sessionTitle }) {
         onClick: () => settingsStore.actions.resetHighlightPresets(),
         type: 'button',
       }, '恢复全部默认预设')),
-    h('div', { className: 'dsh-wel-settings-hint' }, '调整左侧文件树的行高与对话文字大小；图标徽标按文件类型配色，并为每种文件类型选择编辑器代码高亮预设，未修改的项使用默认值。'),
+    h('div', { className: 'dsh-wel-settings-hint' }, '调整左侧文件树的行高、对话文字大小与搜索结果显示方式；图标徽标按文件类型配色，并为每种文件类型选择编辑器代码高亮预设，未修改的项使用默认值。'),
   )
 }
 function ExplorerToggle(props) {
@@ -2801,6 +3364,7 @@ function AppFrame(props) {
   const workspaces = props.useWorkspaces(state => state.items)
   const recent = props.useWorkspaces(state => state.recentWorkspaceId)
   const [resizing, setResizing] = useState(false)
+  const [chatDropActive, setChatDropActive] = useState(false)
   // Migration: entries persisted before clean-tab drafts were slimmed carry
   // full file text on every tab; re-serializing them on every write keeps the
   // whole value over the localStorage quota. Re-write them once through the
@@ -2841,6 +3405,12 @@ function AppFrame(props) {
   const previewSessionSelection = selectStoredPreviewSession(previewPanels.previewSessions, workspace, currentSession, workspaceId)
   const previewSessionKey = previewSessionSelection.key
   const storedPreviewSession = previewSessionSelection.value
+  // Skip a redundant 3-key rewrite when this exact key-set already holds the
+  // same snapshot: each write serializes and stores the whole previewSessions
+  // value, so repeated identical writes (e.g. a persisted layout effect firing
+  // with unchanged state) are pure cost. Keyed per key-set, because switching
+  // sessions legitimately writes the same snapshot to a different key-set.
+  const lastPersistedSnapshotRef = useRef(new Map())
   const persistPreviewSession = useCallback((value) => {
     // Write the latest snapshot to every key the restore may pick: the current
     // session key (highest restore priority), the selected key (which falls
@@ -2852,10 +3422,18 @@ function AppFrame(props) {
     if (previewSessionKey !== undefined) keys.add(previewSessionKey)
     if (currentSession !== undefined) keys.add(String(currentSession))
     if (workspaceId !== undefined) keys.add(String(workspaceId))
+    if (keys.size === 0) return
+    const keySet = [...keys].sort().join('|')
+    const serialized = JSON.stringify(value)
+    if (lastPersistedSnapshotRef.current.get(keySet) === serialized) return
+    lastPersistedSnapshotRef.current.set(keySet, serialized)
+    if (lastPersistedSnapshotRef.current.size > 128) lastPersistedSnapshotRef.current.clear()
     for (const key of keys) props.previewSessionsStore.actions.rememberPreviewSession(key, value)
   }, [currentSession, previewSessionKey, props.previewSessionsStore, workspaceId])
   const last = useRef(currentSession)
   const viewportRef = useRef(null)
+  const chatSectionRef = useRef(null)
+  const chatDropSuppressed = useRef(false)
   const [viewportWidth, setViewportWidth] = useState(0)
   useEffect(() => {
     const liveSessionIds = sessionIds.map(String)
@@ -2875,6 +3453,55 @@ function AppFrame(props) {
     const observer = new ResizeObserver(() => { measure() })
     observer.observe(viewport)
     return () => { observer.disconnect() }
+  }, [])
+  // Chat drop mask: track file drags over the chat pane (capture phase, but
+  // without stopping propagation so the harness composer still receives the
+  // drop and attaches images per its original behavior). The mask is drawn by
+  // this layout and covers only the chat pane; the harness's full-viewport
+  // mask is hidden by CSS. Enter/leave use a depth counter (dragleave's
+  // relatedTarget is null in Chrome, so a contains() check would hide the mask
+  // on the first child transition). Closing the mask suppresses it for the
+  // current drag until the drag ends or is dropped.
+  useEffect(() => {
+    const section = chatSectionRef.current
+    if (section === null) return undefined
+    let depth = 0
+    const hide = () => {
+      depth = 0
+      chatDropSuppressed.current = false
+      setChatDropActive(false)
+    }
+    const onDragEnter = (event) => {
+      if (!hasDraggedFiles(event)) return
+      if (chatDropSuppressed.current) return
+      depth += 1
+      setChatDropActive(true)
+    }
+    const onDragOver = (event) => {
+      if (!hasDraggedFiles(event)) return
+      if (chatDropSuppressed.current) return
+      setChatDropActive(true)
+    }
+    const onDragLeave = (event) => {
+      if (!hasDraggedFiles(event)) return
+      if (chatDropSuppressed.current) return
+      depth = Math.max(0, depth - 1)
+      if (depth === 0) hide()
+    }
+    const onDrop = () => { hide() }
+    const onDragEnd = () => { hide() }
+    section.addEventListener('dragenter', onDragEnter, true)
+    section.addEventListener('dragover', onDragOver, true)
+    section.addEventListener('dragleave', onDragLeave, true)
+    section.addEventListener('drop', onDrop, true)
+    window.addEventListener('dragend', onDragEnd)
+    return () => {
+      section.removeEventListener('dragenter', onDragEnter, true)
+      section.removeEventListener('dragover', onDragOver, true)
+      section.removeEventListener('dragleave', onDragLeave, true)
+      section.removeEventListener('drop', onDrop, true)
+      window.removeEventListener('dragend', onDragEnd)
+    }
   }, [])
   const asideRef = useRef(null)
   // The sidebar shell (harness ui-sidebar SidebarRoot) owns the New Session
@@ -2949,7 +3576,7 @@ function AppFrame(props) {
   const preview = filesActive || panes.explorerOpen ? clamp(panes.preview ?? PREVIEW_DEFAULT, PREVIEW_MIN, previewMax) : 0
   const previewBoundary = sidebar + preview
   const treePortalTarget = sidebarChrome?.files ?? null
-  return h('div',{ref:viewportRef,className:'dsh-wel-viewport'},h('main',{className:'dsh-wel-frame','data-explorer-closed':!panes.explorerOpen&&!filesActive||undefined,'data-sidebar-collapsed':collapsed||undefined,'data-sidebar-files':filesActive||undefined,'data-resizing':resizing||undefined,style:{'--dsh-wel-preview':`${preview}px`,'--dsh-wel-sidebar':`${sidebar}px`,'--dsh-wel-row-height':`${settings.rowHeight ?? ROW_HEIGHT_DEFAULT}px`,'--dsh-wel-chat-font-scale':String(chatFontScale),...fileColorVars}},h('aside',{className:'dsh-wel-sidebar',ref:asideRef},props.renderSlot('sidebar',{collapsed,width:sidebar}),sidebarChrome?.top?createPortal(h(SidebarTopActions,{collapsed,view,width:sidebar,onSelectSessions:()=>{props.actions.setView('sessions')},onSelectFiles:()=>{if(collapsed)props.toggleSidebar();props.actions.setView('files')}}),sidebarChrome.top):null),workspace?h(WorkspaceExplorer,{key:previewSessionKey ?? workspace.workspaceId,clearDraft:clearWorkspaceDraft,createEntry:props.createEntry,listDirectory:props.listDirectory,persistDraft:persistWorkspaceDraft,persistPreviewSession,publishEditorContext,readFile:props.readFile,renameEntry:props.renameEntry,saveFile:props.saveFile,settingsStore:props.settingsStore,storedDraft:panels.drafts[String(workspace.workspaceId)],storedPreviewSession,sessionTitle,sessionId,renameSession:props.renameSession,treePortalTarget,workspace}):h(EmptyWorkspaceExplorer,{sessionTitle,treePortalTarget}),h('section',{className:'dsh-wel-chat'},props.renderSlot('conversation',{})),!collapsed?h(ResizeHandle,{label:'调整会话面板宽度',left:sidebar,max:sidebarMax,min:SIDEBAR_MIN,onDragging:setResizing,onResize:width=>props.actions.setSidebar(width,sidebarMax),value:sidebar}):null,(panes.explorerOpen||filesActive)?h(ResizeHandle,{label:'调整文件预览宽度',left:previewBoundary,max:previewMax,min:PREVIEW_MIN,onDragging:setResizing,onResize:width=>props.explorerPaneStore.actions.setPreview(width,previewMax),value:preview}):null,h('aside',{className:'dsh-wel-details','data-closed':!panels.detailsOpen||!detailsCapable||undefined},props.renderSlot('details',{})),h('div',{className:'dsh-wel-overlay','data-shell-overlay':true},props.renderSlot('shell.overlay',{}))))}
+  return h('div',{ref:viewportRef,className:'dsh-wel-viewport'},h('main',{className:'dsh-wel-frame','data-explorer-closed':!panes.explorerOpen&&!filesActive||undefined,'data-sidebar-collapsed':collapsed||undefined,'data-sidebar-files':filesActive||undefined,'data-resizing':resizing||undefined,style:{'--dsh-wel-preview':`${preview}px`,'--dsh-wel-sidebar':`${sidebar}px`,'--dsh-wel-row-height':`${settings.rowHeight ?? ROW_HEIGHT_DEFAULT}px`,'--dsh-wel-chat-font-scale':String(chatFontScale),...fileColorVars}},h('aside',{className:'dsh-wel-sidebar',ref:asideRef},props.renderSlot('sidebar',{collapsed,width:sidebar}),sidebarChrome?.top?createPortal(h(SidebarTopActions,{collapsed,view,width:sidebar,onSelectSessions:()=>{props.actions.setView('sessions')},onSelectFiles:()=>{if(collapsed)props.toggleSidebar();props.actions.setView('files')}}),sidebarChrome.top):null),workspace?h(WorkspaceExplorer,{key:previewSessionKey ?? workspace.workspaceId,clearDraft:clearWorkspaceDraft,createEntry:props.createEntry,listDirectory:props.listDirectory,persistDraft:persistWorkspaceDraft,persistPreviewSession,publishEditorContext,readFile:props.readFile,renameEntry:props.renameEntry,saveFile:props.saveFile,settingsStore:props.settingsStore,storedDraft:panels.drafts[String(workspace.workspaceId)],storedPreviewSession,sessionTitle,sessionId,renameSession:props.renameSession,treePortalTarget,workspace}):h(EmptyWorkspaceExplorer,{sessionTitle,treePortalTarget}),h('section',{className:'dsh-wel-chat',ref:chatSectionRef},props.renderSlot('conversation',{}),chatDropActive?h('div',{className:'dsh-wel-chat-drop-mask',role:'presentation'},h('button',{'aria-label':'关闭拖放提示',className:'dsh-wel-chat-drop-close',onClick:()=>{chatDropSuppressed.current=true;setChatDropActive(false)},title:'关闭',type:'button'},'×'),h('div',{className:'dsh-wel-chat-drop-card'},'松开以添加图片')):null),!collapsed?h(ResizeHandle,{label:'调整会话面板宽度',left:sidebar,max:sidebarMax,min:SIDEBAR_MIN,onDragging:setResizing,onResize:width=>props.actions.setSidebar(width,sidebarMax),value:sidebar}):null,(panes.explorerOpen||filesActive)?h(ResizeHandle,{label:'调整文件预览宽度',left:previewBoundary,max:previewMax,min:PREVIEW_MIN,onDragging:setResizing,onResize:width=>props.explorerPaneStore.actions.setPreview(width,previewMax),value:preview}):null,h('aside',{className:'dsh-wel-details','data-closed':!panels.detailsOpen||!detailsCapable||undefined},props.renderSlot('details',{})),h('div',{className:'dsh-wel-overlay','data-shell-overlay':true},props.renderSlot('shell.overlay',{}))))}
 
 export const inject = ['slots', 'theme', 'sessions']
 export function apply(ctx) {
