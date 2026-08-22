@@ -60,6 +60,13 @@ const THINK_COLLAPSE_DELAY_MAX_S = 10
 const THINK_COLLAPSE_DELAY_STEP_S = 0.1
 const EXPLORER_SETTINGS_STORE_KEY = 'dsh.workspace.explorer.settings.v1'
 const EXPLORER_LAYOUT_STORE_KEY = 'dsh.workspace.explorer.layout.v1'
+/* Debounce (ms) before a dirty tab's draft is auto-saved to disk. Auto-save
+   persists the temporary edits so a page refresh restores them from disk; it
+   never clears the dirty marker (only an explicit save does). */
+const AUTOSAVE_DELAY_MS = 1000
+/* Above this many base lines the save-time three-way merge is skipped and a
+   conflict prompt is shown directly (the Myers diff is O(N*D) worst case). */
+const MERGE_MAX_LINES = 20000
 /* Mobile (phone-column) mode, mirroring the dsh-mobile-preview approach: a
    document-class gate drives every layout override, and the floating-drawer
    and file-fullscreen states ride sibling classes so the whole chrome stays in
@@ -248,10 +255,19 @@ const zh = {
   'editor.saved': '保存成功。',
   'editor.savingWith': '正在保存（{encoding}）…',
   'editor.savedAs': '已保存为 {encoding}。',
-  'editor.saveConflict': '保存冲突：文件已在其他位置更改。草稿已保留，请重新读取并手动合并。',
+  'editor.saveConflict': '保存冲突：文件已在磁盘上被其他工具修改。草稿已保留，请重新读取或选择保留版本。',
   'editor.saveFailed': '保存失败：{message}。草稿已保留。',
   'editor.saveAsFailed': '无法另存为编码：{reason}',
-  'editor.cancelRestored': '已取消编辑，内容已恢复。',
+  'editor.cancelRestored': '已取消编辑，内容已恢复到最近保存的版本。',
+  'editor.autosaveFailed': '自动保存失败：{message}。草稿已保留。',
+  'editor.saveCancelled': '已取消保存，仍可继续编辑。',
+  'dialog.saveConflictTitle': '保存冲突',
+  'dialog.saveConflictMessage': '文件在磁盘上已被其他工具修改，且修改位置与你的修改发生冲突。请选择保留哪个版本。',
+  'dialog.saveConflictKeepMine': '保留我的版本',
+  'dialog.saveConflictKeepTheirs': '保留磁盘版本',
+  'dialog.saveConflictMine': '我的修改',
+  'dialog.saveConflictTheirs': '磁盘版本',
+  'dialog.saveConflictRegion': '冲突位置：第 {lines} 行',
   'editor.unsavedTabClose': '此标签有未保存内容，请先保存或取消编辑。',
   'editor.unsavedTabsClose': '存在有未保存内容的标签，请先保存或取消编辑。',
   'editor.unsavedBlocked': '当前文件有未保存的更改，请先保存或取消编辑。',
@@ -267,7 +283,7 @@ const zh = {
   'status.revealed': '已在资源管理器中打开。',
   'status.revealFailed': '打开失败：{message}',
   'status.draftRestored': '已恢复此工作区中未保存的草稿。',
-  'status.draftRestoredConflict': '磁盘文件已在草稿保存后更改。草稿已恢复，保存时将检查冲突。',
+  'status.draftRestoredConflict': '磁盘文件已在草稿保存后更改。草稿已恢复；保存时将自动合并或提示选择。',
   'status.draftNotRestorable': '检测到未保存草稿，但文件当前不可编辑。草稿内容已展示；关闭标签或刷新后将丢弃，无法保存。',
   'status.externalOpened': '已打开外部文件 {name}。',
   'status.externalOpenedMany': '已打开 {count} 个外部文件。',
@@ -406,6 +422,8 @@ const zh = {
   'error.invalid-response.search': '搜索接口返回了无效响应（HTTP {status}）',
   'error.invalid-response.reveal': '在资源管理器中打开接口返回了无效响应（HTTP {status}）',
   'error.invalid-response.context-text': '编辑器上下文接口缺少文本结果',
+  'error.invalid-response.draft': '暂存盘接口返回了无效响应（HTTP {status}）',
+  'error.draft-failed': '暂存盘操作失败（HTTP {status}）',
   'error.request-failed': '读取工作区失败（HTTP {status}）',
   'error.save-failed': '保存文件失败（HTTP {status}）',
   'error.external-file-failed': '打开外部文件失败（HTTP {status}）',
@@ -428,6 +446,10 @@ const zh = {
   'mobile.sidebarOpen': '展开侧栏',
   'mobile.sidebarClose': '收起侧栏',
   'mobile.files': '文件内容浏览',
+  'switcher.aria': '切换会话',
+  'switcher.trigger.title': '点击切换会话',
+  'switcher.subagent': '子代理',
+  'switcher.noSessions': '暂无其他会话',
 }
 const en = {
   'nav.sessions': 'Sessions',
@@ -549,10 +571,19 @@ const en = {
   'editor.saved': 'Saved.',
   'editor.savingWith': 'Saving ({encoding})…',
   'editor.savedAs': 'Saved as {encoding}.',
-  'editor.saveConflict': 'Save conflict: the file changed elsewhere. Your draft was kept; re-read and merge manually.',
+  'editor.saveConflict': 'Save conflict: the file was changed on disk by another tool. Your draft was kept; reload or pick which version to keep.',
   'editor.saveFailed': 'Save failed: {message}. Your draft was kept.',
   'editor.saveAsFailed': 'Cannot save as encoding: {reason}',
-  'editor.cancelRestored': 'Edit canceled; content restored.',
+  'editor.cancelRestored': 'Edit canceled; content restored to the last saved version.',
+  'editor.autosaveFailed': 'Auto-save failed: {message}. Your draft was kept.',
+  'editor.saveCancelled': 'Save canceled; you can keep editing.',
+  'dialog.saveConflictTitle': 'Save Conflict',
+  'dialog.saveConflictMessage': 'The file was changed on disk by another tool, and the changes overlap your edits. Choose which version to keep.',
+  'dialog.saveConflictKeepMine': 'Keep my version',
+  'dialog.saveConflictKeepTheirs': 'Keep disk version',
+  'dialog.saveConflictMine': 'My changes',
+  'dialog.saveConflictTheirs': 'Disk version',
+  'dialog.saveConflictRegion': 'Conflict at line(s) {lines}',
   'editor.unsavedTabClose': 'This tab has unsaved content; save or cancel editing first.',
   'editor.unsavedTabsClose': 'Some tabs have unsaved content; save or cancel editing first.',
   'editor.unsavedBlocked': 'The current file has unsaved changes; save or cancel editing first.',
@@ -568,7 +599,7 @@ const en = {
   'status.revealed': 'Revealed in Explorer.',
   'status.revealFailed': 'Open failed: {message}',
   'status.draftRestored': 'Restored unsaved drafts for this workspace.',
-  'status.draftRestoredConflict': 'The file changed on disk after your draft was saved. The draft was restored; saving will check for conflicts.',
+  'status.draftRestoredConflict': 'The file changed on disk after your draft was saved. The draft was restored; saving will merge or ask you to choose.',
   'status.draftNotRestorable': 'Unsaved draft detected, but the file is not editable right now. The draft is shown; it will be discarded on tab close or refresh and cannot be saved.',
   'status.externalOpened': 'Opened external file {name}.',
   'status.externalOpenedMany': 'Opened {count} external files.',
@@ -707,6 +738,8 @@ const en = {
   'error.invalid-response.search': 'The search API returned an invalid response (HTTP {status})',
   'error.invalid-response.reveal': 'The reveal API returned an invalid response (HTTP {status})',
   'error.invalid-response.context-text': 'The editor-context API returned no text result',
+  'error.invalid-response.draft': 'The draft API returned an invalid response (HTTP {status})',
+  'error.draft-failed': 'The draft operation failed (HTTP {status})',
   'error.request-failed': 'Failed to read the workspace (HTTP {status})',
   'error.save-failed': 'Failed to save the file (HTTP {status})',
   'error.external-file-failed': 'Failed to open the external file (HTTP {status})',
@@ -729,6 +762,10 @@ const en = {
   'mobile.sidebarOpen': 'Open sidebar',
   'mobile.sidebarClose': 'Close sidebar',
   'mobile.files': 'Browse files',
+  'switcher.aria': 'Switch session',
+  'switcher.trigger.title': 'Click to switch session',
+  'switcher.subagent': 'subagent',
+  'switcher.noSessions': 'No other sessions',
 }
 /* CodeMirror search/goto-line panel phrases (EditorState.phrases keys; keep
    the $ placeholders). English is CodeMirror's built-in default, so the
@@ -850,7 +887,7 @@ const styles = `
 .dsh-wel-chevron{display:inline-flex;align-items:center;justify-content:center;flex:0 0 12px;color:var(--dsw-alias-label-caption);font-size:10px}.dsh-wel-file-mark{display:inline-flex;align-items:center;justify-content:center;flex:0 0 16px;width:16px;height:16px;border-radius:4px;background:color-mix(in srgb,var(--dsh-wel-file-accent,var(--dsw-alias-label-tertiary)) 16%,transparent);color:var(--dsh-wel-file-accent,var(--dsw-alias-label-tertiary));font-size:8px;font-weight:600;text-transform:uppercase}.dsh-wel-file-mark[data-group='directory']{--dsh-wel-file-accent:var(--dsh-wel-file-directory,#3b82f6)}.dsh-wel-file-mark[data-group='typescript']{--dsh-wel-file-accent:var(--dsh-wel-file-typescript,#3178c6)}.dsh-wel-file-mark[data-group='javascript']{--dsh-wel-file-accent:var(--dsh-wel-file-javascript,#e5c158)}.dsh-wel-file-mark[data-group='json']{--dsh-wel-file-accent:var(--dsh-wel-file-json,#e07a3c)}.dsh-wel-file-mark[data-group='markup']{--dsh-wel-file-accent:var(--dsh-wel-file-markup,#e04a3c)}.dsh-wel-file-mark[data-group='style']{--dsh-wel-file-accent:var(--dsh-wel-file-style,#a855f7)}.dsh-wel-file-mark[data-group='markdown']{--dsh-wel-file-accent:var(--dsh-wel-file-markdown,#12a5a0)}.dsh-wel-file-mark[data-group='log']{--dsh-wel-file-accent:var(--dsh-wel-file-log,#d99a2b)}.dsh-wel-file-mark[data-group='python']{--dsh-wel-file-accent:var(--dsh-wel-file-python,#4b8bb8)}.dsh-wel-file-mark[data-group='shell']{--dsh-wel-file-accent:var(--dsh-wel-file-shell,#22a06b)}.dsh-wel-file-mark[data-group='config']{--dsh-wel-file-accent:var(--dsh-wel-file-config,#8a95a5)}.dsh-wel-file-mark[data-group='c-family']{--dsh-wel-file-accent:var(--dsh-wel-file-c-family,#5a7ba6)}.dsh-wel-file-mark[data-group='csharp']{--dsh-wel-file-accent:var(--dsh-wel-file-csharp,#a25fd0)}.dsh-wel-file-mark[data-group='other']{--dsh-wel-file-accent:var(--dsh-wel-file-other,#9aa3ad)}.dsh-wel-file-mark[data-group='blocked']{--dsh-wel-file-accent:var(--dsh-wel-file-blocked,#e5484d)}.dsh-wel-row-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-symlink{margin-left:auto;color:var(--dsw-alias-label-caption);font-size:10px}.dsh-wel-tree-status{padding:8px 10px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}.dsh-wel-tree-status[data-error]{color:var(--dsw-alias-state-error-primary)}.dsh-wel-empty{display:flex;flex:1;min-height:0;align-items:center;justify-content:center;padding:24px;color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:20px;text-align:center}
 .dsh-wel-preview-header-meta{display:flex;align-items:center;gap:6px;min-width:0}.dsh-wel-preview-header-meta>span:not(.dsh-wel-language):not(.dsh-wel-encoding){overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:15px;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-language{flex:0 0 auto;padding:1px 5px;border-radius:4px;background:var(--dsw-alias-markdown-tag);color:var(--dsw-alias-label-secondary);font-size:9px;font-weight:600;line-height:14px;text-transform:uppercase}.dsh-wel-encoding{flex:0 0 auto;padding:1px 5px;border-radius:4px;background:var(--dsw-alias-markdown-tag);color:var(--dsw-alias-label-secondary);font-size:9px;font-weight:600;line-height:14px;text-transform:uppercase}.dsh-wel-dirty{color:var(--dsw-alias-state-warn-label);font-size:12px}.dsh-wel-preview-tabs{display:flex;align-items:stretch;gap:4px;min-width:0;padding:6px 8px;border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-specific-sidebar-fill);overflow-x:auto;overflow-y:hidden;scrollbar-width:thin}.dsh-wel-preview-tab{flex:none;display:flex;align-items:center;gap:5px;min-width:0;max-width:220px;height:28px;padding:0 5px 0 9px;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:18px;cursor:grab;box-sizing:border-box;white-space:nowrap}.dsh-wel-preview-tab:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsh-wel-preview-tab[data-active]{background:var(--dsw-alias-interactive-bg-active);color:var(--dsw-alias-label-primary)}.dsh-wel-preview-tab[data-dragging]{opacity:.7}.dsh-wel-preview-drop-indicator{flex:none;width:3px;height:20px;border-radius:2px;background:var(--dsw-alias-state-business-primary);align-self:center;pointer-events:none}.dsh-wel-preview-tab-button{display:flex;flex:1;align-items:center;gap:5px;min-width:0;height:100%;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}.dsh-wel-preview-tab-name{min-width:0;overflow:hidden;text-overflow:ellipsis}.dsh-wel-preview-tab-close{flex:none;display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border:0;border-radius:4px;background:transparent;color:inherit;font-size:14px;line-height:1;cursor:pointer}.dsh-wel-preview-tab-close:hover{background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary)}.dsh-wel-preview-tab-close:disabled{cursor:not-allowed;opacity:.45}.dsh-wel-preview-body{position:relative;flex:1;min-height:0;overflow:hidden;background:var(--dsw-alias-markdown-code-block)}.dsh-wel-editor-host{height:100%;min-width:0}.dsh-wel-editor-host .cm-editor{height:100%;background:var(--dsw-alias-markdown-code-block);color:var(--dsw-alias-label-primary)}.dsh-wel-editor-host .cm-scroller{font-family:var(--dsw-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:12px;line-height:19px;overflow:auto}.dsh-wel-editor-host .cm-gutters{background:var(--dsw-alias-markdown-code-block-banner);color:var(--dsw-alias-label-caption);border-right:1px solid var(--dsw-alias-border-l2)}.dsh-wel-editor-host .cm-activeLine,.dsh-wel-editor-host .cm-activeLineGutter{background:var(--dsw-alias-interactive-bg-hover)}.dsh-wel-editor-host .cm-selectionBackground,.dsh-wel-editor-host .cm-content ::selection{background:var(--dsw-alias-interactive-bg-active)!important}.dsh-wel-editor-host .cm-cursor{border-left-color:var(--dsw-alias-label-primary)}.dsh-wel-editor-host .cm-foldPlaceholder{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary)}.dsh-wel-editor-host .cm-panels{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}.dsh-wel-editor-host .cm-panel input{background:var(--dsw-alias-bg-base);border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary)}
 .dsh-wel-context-row{box-sizing:border-box;display:flex;align-items:center;gap:8px;flex:none;width:min(var(--dsh-composer-card-max-width),max(0px,calc(100% - (var(--dsh-composer-side-clearance) * 2))));margin:0 auto;padding:0}.dsh-wel-context-prefix{display:flex;flex:1;align-items:center;gap:6px;min-width:0;min-height:28px;padding:5px 8px 5px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:22px;background:var(--dsw-specific-input-major);color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;line-height:16px;text-align:left;cursor:pointer}.dsh-wel-context-prefix:hover{color:var(--dsw-alias-label-primary)}.dsh-wel-context-prefix:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}.dsh-wel-context-prefix[data-inactive]{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-caption);filter:grayscale(1)}.dsh-wel-context-prefix-mark{flex:none;font-size:12px}.dsh-wel-context-prefix-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-message-context-summary{box-sizing:border-box;display:flex;align-items:center;align-self:flex-end;gap:6px;max-width:100%;min-height:24px;padding:3px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:22px;background:var(--dsw-specific-input-major);color:var(--dsw-alias-label-secondary);font-size:11px;line-height:16px}.dsh-wel-message-context-summary-mark{flex:none;font-size:12px}.dsh-wel-message-context-summary-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-message-context-summary-range{flex:none;color:var(--dsw-alias-label-caption)}.dsh-wel-message-context-bubble[data-dsh-wel-empty-prompt]{display:none}
-.dsh-wel-banner{padding:7px 12px;border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-state-warn-tertiary);color:var(--dsw-alias-state-warn-label);font-size:11px;line-height:16px}.dsh-wel-banner-actions{display:flex;gap:6px;margin-top:5px}.dsh-wel-status{padding:5px 12px;border-bottom:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-tertiary);font-size:11px}.dsh-wel-status[data-error]{color:var(--dsw-alias-state-error-primary)}.dsh-wel-error-card{max-width:300px;padding:14px 16px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:19px;text-align:left}.dsh-wel-dialog-backdrop{position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;padding:20px;background:var(--dsw-alias-bg-mask-1,rgba(0,0,0,.38));box-sizing:border-box}.dsh-wel-dialog{width:min(360px,100%);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-elevated,0 12px 36px rgba(0,0,0,.24));box-sizing:border-box}.dsh-wel-dialog-header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 14px;border-bottom:1px solid var(--dsw-alias-border-l2)}.dsh-wel-dialog-title{min-width:0;overflow:hidden;color:var(--dsw-alias-label-primary);font-size:13px;font-weight:600;line-height:18px;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-dialog-body{display:flex;flex-direction:column;gap:8px;padding:14px}.dsh-wel-dialog-input{width:100%;height:32px;padding:0 9px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;box-sizing:border-box}.dsh-wel-dialog-input:focus{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-1px}.dsh-wel-dialog-error{color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:18px}.dsh-wel-dialog-message{color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px}.dsh-wel-dialog-warning{color:var(--dsw-alias-state-warn-label);font-size:12px;line-height:18px}.dsh-wel-danger-button{color:var(--dsw-alias-state-error-primary)}.dsh-wel-dialog-footer{display:flex;justify-content:flex-end;gap:8px;padding:0 14px 14px}
+.dsh-wel-banner{padding:7px 12px;border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-state-warn-tertiary);color:var(--dsw-alias-state-warn-label);font-size:11px;line-height:16px}.dsh-wel-banner-actions{display:flex;gap:6px;margin-top:5px}.dsh-wel-status{padding:5px 12px;border-bottom:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-tertiary);font-size:11px}.dsh-wel-status[data-error]{color:var(--dsw-alias-state-error-primary)}.dsh-wel-error-card{max-width:300px;padding:14px 16px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:19px;text-align:left}.dsh-wel-dialog-backdrop{position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;padding:20px;background:var(--dsw-alias-bg-mask-1,rgba(0,0,0,.38));box-sizing:border-box}.dsh-wel-dialog{width:min(360px,100%);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-elevated,0 12px 36px rgba(0,0,0,.24));box-sizing:border-box}.dsh-wel-dialog-header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 14px;border-bottom:1px solid var(--dsw-alias-border-l2)}.dsh-wel-dialog-title{min-width:0;overflow:hidden;color:var(--dsw-alias-label-primary);font-size:13px;font-weight:600;line-height:18px;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-dialog-body{display:flex;flex-direction:column;gap:8px;padding:14px}.dsh-wel-dialog-input{width:100%;height:32px;padding:0 9px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;box-sizing:border-box}.dsh-wel-dialog-input:focus{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-1px}.dsh-wel-dialog-error{color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:18px}.dsh-wel-dialog-message{color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px}.dsh-wel-dialog-warning{color:var(--dsw-alias-state-warn-label);font-size:12px;line-height:18px}.dsh-wel-danger-button{color:var(--dsw-alias-state-error-primary)}.dsh-wel-dialog-footer{display:flex;justify-content:flex-end;gap:8px;padding:0 14px 14px}.dsh-wel-conflict-region{display:flex;flex-direction:column;gap:6px}.dsh-wel-conflict-region-title{color:var(--dsw-alias-state-warn-label);font-size:11px;line-height:16px}.dsh-wel-conflict-cols{display:grid;grid-template-columns:1fr 1fr;gap:6px;min-width:0}.dsh-wel-conflict-col{min-width:0;overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:6px}.dsh-wel-conflict-col-label{padding:3px 6px;border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:14px}.dsh-wel-conflict-mine .dsh-wel-conflict-col-label{color:var(--dsw-alias-state-warn-label)}.dsh-wel-conflict-theirs .dsh-wel-conflict-col-label{color:var(--dsw-alias-state-business-primary)}.dsh-wel-conflict-code{margin:0;max-height:160px;overflow:auto;padding:6px;color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-mono,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);font-size:11px;line-height:16px;white-space:pre;box-sizing:border-box}
 .dsh-wel-frame [data-slot='sidebar.footer.action']{display:flex!important;flex-direction:column;align-items:stretch;width:100%;min-width:0}
 .dsh-wel-splitter{position:absolute;top:0;bottom:0;z-index:8;width:8px;margin-left:-4px;border:0;background:transparent;cursor:col-resize;touch-action:none}.dsh-wel-splitter::after{content:'';position:absolute;top:0;bottom:0;left:3px;width:2px;background:transparent;transition:background var(--ds-transition-duration-fast) var(--ds-ease-in-out)}.dsh-wel-splitter:hover::after,.dsh-wel-splitter[data-dragging]::after,.dsh-wel-splitter:focus-visible::after{background:var(--dsw-alias-state-business-primary)}.dsh-wel-details{position:absolute;z-index:16;top:0;right:0;bottom:0;width:min(440px,45vw);overflow:hidden;border-left:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-elevated,0 12px 36px var(--dsw-alias-bg-mask-1));transform:translateX(0);opacity:1;transition:transform var(--ds-transition-duration-slow) var(--ds-ease-in-out),opacity var(--ds-transition-duration-fast) var(--ds-ease-in-out)}.dsh-wel-details[data-closed]{pointer-events:none;visibility:hidden;transform:translateX(100%);opacity:0}.dsh-wel-overlay{position:absolute;inset:0;z-index:20;pointer-events:none}.dsh-wel-overlay>*{pointer-events:auto}.dsh-wel-tree{position:relative}.dsh-wel-context-menu{position:fixed;z-index:40;min-width:168px;padding:6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-elevated,0 12px 36px rgba(0,0,0,.24));box-sizing:border-box}.dsh-wel-context-item{display:block;width:100%;height:30px;padding:0 10px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:30px;text-align:left;cursor:pointer;box-sizing:border-box}.dsh-wel-context-item:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsh-wel-context-item:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-2px}.dsh-wel-context-item:disabled{cursor:not-allowed;opacity:.5}.dsh-wel-context-item:disabled:hover{background:transparent;color:var(--dsw-alias-label-primary)}.dsh-wel-context-separator{height:1px;margin:4px 0;border:0;background:var(--dsw-alias-border-l2)}.dsh-wel-copy-notice{position:absolute;right:10px;bottom:10px;z-index:12;padding:5px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-size:11px;line-height:16px;box-shadow:var(--dsw-shadow-elevated,0 4px 12px rgba(0,0,0,.18))}@media(prefers-reduced-motion:reduce){.dsh-wel-frame,.dsh-wel-details,.dsh-wel-splitter::after{transition:none}}
 .dsh-wel-search-header{flex-direction:column;align-items:stretch;gap:8px;padding:8px}
@@ -999,6 +1036,28 @@ body > [role="status"]{display:none!important}
 @keyframes dsh-wel-toast-in{from{opacity:0;transform:translate(-50%,-6px)}to{opacity:1;transform:translate(-50%,0)}}
 @keyframes dsh-wel-toast-fade{to{opacity:0}}
 @media (prefers-reduced-motion: reduce){.dsh-wel-toast{animation:dsh-wel-toast-fade 1000ms ease 3000ms forwards}}
+/* ── Session switcher (right-header title → quick-switch dropdown) ──────
+   The conversation header's current-title crumb (the last crumb segment) is
+   hidden so the switcher trigger — rendered in
+   conversation.session.header.actions at order -400 — becomes the visible
+   session title; subagent parent breadcrumbs stay (only the self crumb is
+   hidden). The panel is portalled to body with fixed positioning, so the
+   chat column's overflow never clips it. */
+[data-slot="conversation.session.header"] > header > div:first-child > div:first-child > nav > span:last-child{display:none}
+.dsh-wel-session-switcher{display:inline-flex;align-items:center;min-width:0;flex:0 0 auto}
+.dsh-wel-session-switcher-trigger{display:inline-flex;align-items:center;gap:4px;max-width:min(320px,60vw);min-width:0;padding:2px 6px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-primary);font-family:inherit;font-size:14px;font-weight:500;line-height:22px;cursor:pointer;box-sizing:border-box}
+.dsh-wel-session-switcher-trigger:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dsh-wel-session-switcher-trigger:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-2px}
+.dsh-wel-session-switcher-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsh-wel-session-switcher .dsh-wel-chevron{flex:none;font-size:10px;line-height:1;color:var(--dsw-alias-label-secondary)}
+.dsh-wel-session-switcher-panel{position:fixed;z-index:60;max-height:min(60vh,420px);overflow-y:auto;padding:4px;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-elevated,0 10px 28px rgba(0,0,0,.2))}
+.dsh-wel-session-switcher-row{display:flex;align-items:center;gap:8px;width:100%;padding:6px 8px;box-sizing:border-box;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary);font-family:inherit;font-size:13px;line-height:20px;text-align:left;cursor:pointer}
+.dsh-wel-session-switcher-row:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dsh-wel-session-switcher-row.dsh-wel-session-switcher-current{color:var(--dsw-alias-brand-primary);font-weight:600}
+.dsh-wel-session-switcher-row-main{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsh-wel-session-switcher-badge{flex:none;margin-left:4px;padding:0 5px;border-radius:6px;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary);font-size:11px;line-height:16px;font-weight:400}
+.dsh-wel-session-switcher-row-ws{flex:none;max-width:40%;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-caption);font-size:12px;line-height:20px}
+.dsh-wel-session-switcher-empty{padding:8px 10px;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:20px}
 /* ── Mobile (phone-column) mode ─────────────────────────────────────────
    Mirror of dsh-mobile-preview: the document-class gate (dsh-wel-mobile-on)
    drives every override; the floating sidebar drawer and the file-fullscreen
@@ -1045,6 +1104,21 @@ html.dsh-wel-mobile-on [data-slot="conversation.session.header.utilities"]{displ
    decision). */
 .dsh-wel-mobile-hero{display:none;position:absolute;top:10px;left:calc(max(0px,50% - 215px) + 8px)}
 html.dsh-wel-mobile-on:has([data-slot="conversation"] [data-phase="hero"]) .dsh-wel-mobile-hero{display:flex;align-items:center;gap:2px}
+/* Settings dialog (the harness Settings panel from the sidebar.settings seat):
+   in mobile the centered 800px modal becomes a fullscreen phone panel with the
+   section nav as a horizontal bar at the bottom, mirroring dsh-mobile-preview.
+   The drawer keeps a transform even when open (translateX(0)), which would
+   make the dialog's position:fixed overlay resolve against the 280px drawer
+   instead of the viewport; dropping the transform while the dialog is open
+   frees the modal to cover the phone column. */
+html.dsh-wel-mobile-on .dsh-wel-sidebar:has([data-slot="sidebar.settings"] [role="dialog"][aria-modal="true"]){transform:none;transition:none}
+html.dsh-wel-mobile-on [data-slot="sidebar.settings"] [role="dialog"][aria-modal="true"]:has(> nav){width:100vw;height:100vh;height:100dvh;max-width:none;max-height:none;border-radius:0;flex-direction:column;overflow:hidden}
+html.dsh-wel-mobile-on [data-slot="sidebar.settings"] [role="dialog"][aria-modal="true"]:has(> nav) > nav{order:2;flex:none;display:flex;flex-direction:row;align-items:center;gap:8px;width:100%;padding:8px 12px 10px;box-sizing:border-box;overflow-x:auto;scrollbar-width:thin}
+html.dsh-wel-mobile-on [data-slot="sidebar.settings"] [role="dialog"][aria-modal="true"]:has(> nav) > nav > div:last-child{display:flex;flex-direction:row;gap:8px;overflow-x:auto;padding-bottom:4px;scrollbar-width:thin}
+html.dsh-wel-mobile-on [data-slot="sidebar.settings"] [role="dialog"][aria-modal="true"]:has(> nav) > nav > div:last-child > button{flex:none}
+html.dsh-wel-mobile-on [data-slot="sidebar.settings"] [role="dialog"][aria-modal="true"]:has(> nav) > nav > div:first-child{position:absolute;top:0;left:0;z-index:1;display:flex;align-items:center;height:54px;padding:0 16px;box-sizing:border-box;white-space:nowrap}
+html.dsh-wel-mobile-on [data-slot="sidebar.settings"] [role="dialog"][aria-modal="true"]:has(> nav) > div{flex:1;min-height:0;display:flex;flex-direction:column}
+html.dsh-wel-mobile-on [data-slot="sidebar.settings"] [role="dialog"][aria-modal="true"]:has(> nav) > div > div:first-child{height:auto;min-height:54px;align-items:center;padding:12px 16px}
 `
 
 const tokenHighlight = HighlightStyle.define([
@@ -1344,6 +1418,169 @@ function readOnlyReason(preview) {
 const fileLabel = name => languageFor(name).label
 const clamp = (value, min, max) => Math.min(max, Math.max(min, Math.round(value)))
 function formatBytes(bytes) { if (!Number.isFinite(bytes) || bytes < 0) return ''; if (bytes < 1024) return `${bytes} B`; if (bytes < 1048576) return `${(bytes / 1024).toFixed(bytes < 10240 ? 1 : 0)} KB`; return `${(bytes / 1048576).toFixed(1)} MB` }
+
+/* ---- Save-time three-way merge (Git-like conflict resolution) ----
+ *
+ * When an explicit save finds the file changed on disk by another tool since
+ * the editing snapshot, the user's edits and the external edits are merged:
+ * - changes in different places are both kept (clean merge);
+ * - overlapping changes are reported as conflicts for the user to pick.
+ * Inputs are split on '\n' (the editor and the decoded disk text share the
+ * same line endings because editable files are never mixed), so the merge
+ * preserves the file's line endings without extra normalization.
+ */
+
+/* Compact Myers diff: the edit script turning `base` into `mine`, as a list of
+   { from, to, added } where base[from..to) is replaced by `added`. from === to
+   is a pure insertion at that position. Adjacent operations are coalesced so
+   the script is canonical (a replacement is one change, not a deletion plus an
+   insertion); changes never overlap and never repeat a `from`. */
+function myersDiff(base, mine) {
+  const N = base.length
+  const M = mine.length
+  const max = N + M
+  const offset = max
+  const v = new Int32Array(2 * max + 1)
+  const trace = []
+  let found = false
+  let d = 0
+  for (; d <= max && !found; d += 1) {
+    trace.push(v.slice())
+    for (let k = -d; k <= d; k += 2) {
+      let x
+      if (k === -d || (k !== d && v[offset + k - 1] < v[offset + k + 1])) x = v[offset + k + 1]
+      else x = v[offset + k - 1] + 1
+      let y = x - k
+      while (x < N && y < M && base[x] === mine[y]) { x += 1; y += 1 }
+      v[offset + k] = x
+      if (x >= N && y >= M) { found = true; break }
+    }
+  }
+  const changes = []
+  let x = N
+  let y = M
+  // `d` is one past the iteration that found the end; the trace snapshot for
+  // backtracking step dd was recorded at the start of iteration dd.
+  for (let dd = d - 1; dd >= 1; dd -= 1) {
+    const vPrev = trace[dd]
+    const k = x - y
+    let prevK
+    if (k === -dd || (k !== dd && vPrev[offset + k - 1] < vPrev[offset + k + 1])) prevK = k + 1
+    else prevK = k - 1
+    const prevX = vPrev[offset + prevK]
+    const prevY = prevX - prevK
+    while (x > prevX && y > prevY) { x -= 1; y -= 1 }
+    if (x === prevX) changes.push({ from: x, to: x, added: mine.slice(prevY, y) })
+    else changes.push({ from: prevX, to: x, added: mine.slice(prevY, y) })
+    x = prevX
+    y = prevY
+  }
+  changes.reverse()
+  // Coalesce adjacent operations (a deletion immediately followed by an
+  // insertion at the same position is one replacement; two insertions at the
+  // same position are one insertion) so the merge walk sees one change per
+  // base span.
+  const coalesced = []
+  for (const change of changes) {
+    const previous = coalesced[coalesced.length - 1]
+    if (previous !== undefined && change.from === previous.to) {
+      coalesced[coalesced.length - 1] = { from: previous.from, to: change.to, added: [...previous.added, ...change.added] }
+    } else {
+      coalesced.push({ from: change.from, to: change.to, added: [...change.added] })
+    }
+  }
+  return coalesced
+}
+
+function linesEqual(left, right) {
+  return left.length === right.length && left.every((line, index) => line === right[index])
+}
+
+function rangesOverlap(left, right) {
+  return left.from < right.to && right.from < left.to
+}
+
+/* Merge `mine` and `theirs` against the common `base`. Returns
+   { status: 'clean', merged } when the two change sets do not overlap, or
+   { status: 'conflict', conflicts } with one entry per overlapping base span
+   ({ start, end, base, mine, theirs } line arrays, start/end 0-based half-open
+   over `base`). */
+function threeWayMerge(baseText, mineText, theirsText) {
+  const base = baseText.split('\n')
+  const mine = mineText.split('\n')
+  const theirs = theirsText.split('\n')
+  if (base.length > MERGE_MAX_LINES || mine.length > MERGE_MAX_LINES || theirs.length > MERGE_MAX_LINES) {
+    return { status: 'conflict', conflicts: [{ start: 0, end: base.length, base, mine, theirs }] }
+  }
+  if (mineText === theirsText) return { status: 'clean', merged: mineText }
+  if (baseText === mineText) return { status: 'clean', merged: theirsText }
+  if (baseText === theirsText) return { status: 'clean', merged: mineText }
+  const mineChanges = myersDiff(base, mine)
+  const theirsChanges = myersDiff(base, theirs)
+  const merged = []
+  const conflicts = []
+  let mi = 0
+  let ti = 0
+  let i = 0
+  const mkConflict = (start, end, m, t) => ({
+    start,
+    end,
+    base: base.slice(start, end),
+    mine: m.added,
+    theirs: t.added,
+  })
+  while (i < base.length || mi < mineChanges.length || ti < theirsChanges.length) {
+    const m = mi < mineChanges.length ? mineChanges[mi] : null
+    const t = ti < theirsChanges.length ? theirsChanges[ti] : null
+    const nextStart = Math.min(m === null ? base.length : m.from, t === null ? base.length : t.from)
+    for (; i < nextStart; i += 1) merged.push(base[i])
+    if (m === null && t === null) break
+    if (m !== null && t !== null && m.from === i && t.from === i) {
+      if (m.to === t.to && linesEqual(m.added, t.added)) {
+        merged.push(...m.added)
+        i = m.to
+        mi += 1
+        ti += 1
+      } else {
+        const end = Math.max(m.to, t.to)
+        conflicts.push(mkConflict(i, end, m, t))
+        i = end
+        mi += 1
+        ti += 1
+      }
+    } else if (m !== null && m.from === i) {
+      if (t !== null && rangesOverlap(m, t)) {
+        const end = Math.max(m.to, t.to)
+        conflicts.push(mkConflict(Math.min(m.from, t.from), end, m, t))
+        i = end
+        mi += 1
+        ti += 1
+      } else {
+        merged.push(...m.added)
+        i = m.to
+        mi += 1
+      }
+    } else if (t !== null && t.from === i) {
+      if (m !== null && rangesOverlap(t, m)) {
+        const end = Math.max(t.to, m.to)
+        conflicts.push(mkConflict(Math.min(t.from, m.from), end, t, m))
+        i = end
+        mi += 1
+        ti += 1
+      } else {
+        merged.push(...t.added)
+        i = t.to
+        ti += 1
+      }
+    } else {
+      if (i < base.length) merged.push(base[i])
+      i += 1
+    }
+  }
+  if (conflicts.length > 0) return { status: 'conflict', conflicts }
+  return { status: 'clean', merged: merged.join('\n') }
+}
+
 // The preview pane only responds to "normal" (non-image) file drags; images
 // belong to the chat composer. Empty MIME types are treated as normal files —
 // the server decides text-likeness and a failure is silently ignored.
@@ -1410,7 +1647,13 @@ function createLayoutStore() {
       openDetails: (draft) => { draft.detailsOpen = true },
       closeDetails: (draft) => { draft.detailsOpen = false },
       rememberDraft: (draft, workspaceId, value) => { draft.drafts[String(workspaceId)] = value },
-      clearDraft: (draft, workspaceId) => { delete draft.drafts[String(workspaceId)] },
+      clearDraft: (draft, workspaceId) => {
+        // Only mutate when the key actually exists: a no-op delete still
+        // bumps the store snapshot, which re-renders AppFrame and can sustain
+        // a remount loop that aborts every in-flight request.
+        const key = String(workspaceId)
+        if (draft.drafts[key] !== undefined) delete draft.drafts[key]
+      },
       setView: (draft, view) => { draft.view = view === 'files' ? 'files' : 'sessions' },
     },
   })
@@ -2114,9 +2357,62 @@ async function putFile(workspaceId, path, content, revision, signal, encoding) {
   }
   return payload
 }
-// Upload a non-workspace file dropped into the preview pane. Browsers hide the
-// absolute path of dropped files, so the raw bytes go to the plugin's own
-// endpoint, which decodes them and returns a read-only preview payload.
+// Draft (staging) file access: while editing, the temporary content lives in a
+// draft file outside the workspace (~/.dsh-plugin/.../drafts), never in the
+// source file. The draft JSON carries { path, encoding, lineEnding, bom,
+// baseText, baseRevision, draft } so a page refresh can restore the whole
+// editing session (content + snapshot) without localStorage carrying it.
+async function readDraft(workspaceId, path, signal) {
+  const query = new URLSearchParams({ workspaceId: String(workspaceId), path })
+  const response = await fetch(`${API_PREFIX}/draft?${query}`, { method: 'GET', headers: { accept: 'application/json' }, credentials: 'same-origin', signal })
+  let payload
+  try {
+    payload = await response.json()
+  } catch (error) {
+    if (error?.name === 'AbortError') throw error
+    throw new WorkspaceApiError('invalid-response', apiErrorMessage(undefined, undefined, 'error.invalid-response.draft', { status: response.status }), response.status)
+  }
+  if (!response.ok) {
+    const failure = payload?.error
+    const code = typeof failure?.code === 'string' ? failure.code : 'draft-read-failed'
+    throw new WorkspaceApiError(code, apiErrorMessage(code, typeof failure?.message === 'string' ? failure.message : undefined, 'error.draft-failed', { status: response.status }), response.status)
+  }
+  return payload
+}
+async function writeDraft(workspaceId, path, payload, signal) {
+  const query = new URLSearchParams({ workspaceId: String(workspaceId), path })
+  const response = await fetch(`${API_PREFIX}/draft?${query}`, { method: 'PUT', headers: { accept: 'application/json', 'content-type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ ...payload, path }), signal })
+  let result
+  try {
+    result = await response.json()
+  } catch (error) {
+    if (error?.name === 'AbortError') throw error
+    throw new WorkspaceApiError('invalid-response', apiErrorMessage(undefined, undefined, 'error.invalid-response.draft', { status: response.status }), response.status)
+  }
+  if (!response.ok) {
+    const failure = result?.error
+    const code = typeof failure?.code === 'string' ? failure.code : 'draft-write-failed'
+    throw new WorkspaceApiError(code, apiErrorMessage(code, typeof failure?.message === 'string' ? failure.message : undefined, 'error.draft-failed', { status: response.status }), response.status)
+  }
+  return result
+}
+async function deleteDraft(workspaceId, path, signal) {
+  const query = new URLSearchParams({ workspaceId: String(workspaceId), path })
+  const response = await fetch(`${API_PREFIX}/draft?${query}`, { method: 'DELETE', headers: { accept: 'application/json' }, credentials: 'same-origin', signal })
+  let result
+  try {
+    result = await response.json()
+  } catch (error) {
+    if (error?.name === 'AbortError') throw error
+    throw new WorkspaceApiError('invalid-response', apiErrorMessage(undefined, undefined, 'error.invalid-response.draft', { status: response.status }), response.status)
+  }
+  if (!response.ok) {
+    const failure = result?.error
+    const code = typeof failure?.code === 'string' ? failure.code : 'draft-delete-failed'
+    throw new WorkspaceApiError(code, apiErrorMessage(code, typeof failure?.message === 'string' ? failure.message : undefined, 'error.draft-failed', { status: response.status }), response.status)
+  }
+  return result
+}
 async function uploadExternalFile(bytes, name, signal, encoding) {
   const query = new URLSearchParams()
   if (typeof name === 'string' && name !== '') query.set('name', name)
@@ -2286,10 +2582,12 @@ function serializePreviewTab(tab) {
   // blow-up the slim serialization was written to prevent), so refresh drops
   // them and they are excluded from every persisted snapshot.
   if (clone.external) return null
-  if (!clone.dirty) {
-    clone.baseText = ''
-    clone.draft = ''
-  }
+  // localStorage keeps ONLY the dirty marker and tab metadata, never file
+  // content or the snapshot: the editing content and snapshot live in the
+  // draft file (~/.dsh-plugin/.../drafts) and are re-read on restore. Dropping
+  // the content from every tab also keeps the localStorage value small.
+  clone.baseText = ''
+  clone.draft = ''
   return clone
 }
 /* Cap the stored session count so the value stays bounded forever. The key
@@ -2403,6 +2701,19 @@ function serializePreviewSession(activePath, tabs, expanded) {
     expanded: expandedList,
   }
 }
+/* Structural identity of a preview snapshot for persistence dedup: what the
+   restore actually depends on (active path, tab paths + dirty flags, expanded
+   directories). Volatile fields (status, scrollTop, draft/baseText content)
+   must NOT participate — the localStorage serialization drops content anyway,
+   and treating status/scroll changes as new snapshots would rewrite the store
+   every render, which re-renders the app (updatedAt) and remounts the
+   explorer, aborting every in-flight request. */
+function previewSnapshotFingerprint(value) {
+  const tabs = Array.isArray(value?.tabs) ? value.tabs : []
+  const tabPart = tabs.map(tab => `${tab.path}:${tab.dirty ? 1 : 0}:${tab.pinned ? 1 : 0}`).join(',')
+  const expandedPart = Array.isArray(value?.expanded) ? value.expanded.join(',') : ''
+  return `${value?.activePath ?? ''}|${tabPart}|${expandedPart}`
+}
 function dropIndexFromEvent(event) {
   const tabNodes = event.currentTarget.querySelectorAll('.dsh-wel-preview-tab')
   for (let i = 0; i < tabNodes.length; i += 1) {
@@ -2498,6 +2809,10 @@ function PreviewToast({text,onDone,headerRef}){const[top,setTop]=useState(null);
 function EncodingDialog({dialog,options,value,busy,onCancel,onPick,onConfirm}){if(dialog===undefined)return null;const title=dialog.mode==='open'?translate('encoding.dialog.open'):translate('encoding.dialog.save'),action=dialog.mode==='open'?translate('encoding.dialog.openAction'):translate('encoding.dialog.saveAction');return h('div',{className:'dsh-wel-dialog-backdrop',onMouseDown:e=>{if(e.target===e.currentTarget&&!busy)onCancel()}},h('div',{'aria-modal':true,className:'dsh-wel-dialog',role:'dialog'},h('div',{className:'dsh-wel-dialog-header'},h('div',{className:'dsh-wel-dialog-title'},title),h('button',{'aria-label':translate('dialog.close'),className:'dsh-wel-icon-button',disabled:busy,onClick:onCancel,title:translate('dialog.close'),type:'button'},'×')),h('div',{className:'dsh-wel-dialog-body'},h('label',{className:'dsh-wel-settings-label',htmlFor:'dsh-wel-encoding-select'},translate('encoding.badge')),h('select',{'aria-label':translate('encoding.badge'),className:'dsh-wel-highlight-preset-select',disabled:busy,id:'dsh-wel-encoding-select',onChange:e=>onPick(e.target.value),value},options.map(enc=>h('option',{key:enc.id,value:enc.id},encodingLabel(enc.id))))),h('div',{className:'dsh-wel-dialog-footer'},h('button',{className:'dsh-wel-text-button',disabled:busy,onClick:onCancel,type:'button'},translate('dialog.cancel')),h('button',{className:'dsh-wel-text-button',disabled:busy||options.length===0,onClick:onConfirm,type:'button'},busy?translate('dialog.processing'):action))))}
 function SessionRenameDialog({draft,busy,error,onCancel,onConfirm,onDraft}){return h('div',{className:'dsh-wel-dialog-backdrop',onMouseDown:e=>{if(e.target===e.currentTarget&&!busy)onCancel()}},h('div',{'aria-modal':true,className:'dsh-wel-dialog',role:'dialog'},h('div',{className:'dsh-wel-dialog-header'},h('div',{className:'dsh-wel-dialog-title'},translate('dialog.renameSession')),h('button',{'aria-label':translate('dialog.close'),className:'dsh-wel-icon-button',disabled:busy,onClick:onCancel,title:translate('dialog.close'),type:'button'},'×')),h('div',{className:'dsh-wel-dialog-body'},h('input',{'aria-label':translate('dialog.sessionName'),autoFocus:true,className:'dsh-wel-dialog-input',disabled:busy,onChange:e=>onDraft(e.target.value),onFocus:e=>e.target.select(),onKeyDown:e=>{if(e.key==='Escape'){e.preventDefault();onCancel()}else if(e.key==='Enter'){e.preventDefault();onConfirm()}},value:draft}),error?h('div',{className:'dsh-wel-dialog-error',role:'alert'},error):null),h('div',{className:'dsh-wel-dialog-footer'},h('button',{className:'dsh-wel-text-button',disabled:busy,onClick:onCancel,type:'button'},translate('dialog.cancel')),h('button',{className:'dsh-wel-text-button',disabled:busy||draft.trim()==='',onClick:onConfirm,type:'button'},busy?translate('dialog.processing'):translate('dialog.rename')))))}
 function DeleteDialog({entry,busy,dirtyWarning,onCancel,onConfirm}){if(entry===undefined)return null;return h('div',{className:'dsh-wel-dialog-backdrop',onMouseDown:e=>{if(e.target===e.currentTarget&&!busy)onCancel()}},h('div',{'aria-modal':true,className:'dsh-wel-dialog',role:'dialog'},h('div',{className:'dsh-wel-dialog-header'},h('div',{className:'dsh-wel-dialog-title'},translate('dialog.deleteTitle')),h('button',{'aria-label':translate('dialog.close'),className:'dsh-wel-icon-button',disabled:busy,onClick:onCancel,title:translate('dialog.close'),type:'button'},'×')),h('div',{className:'dsh-wel-dialog-body'},h('div',{className:'dsh-wel-dialog-message'},translate('dialog.deleteMessage',{name:entry.name})),dirtyWarning?h('div',{className:'dsh-wel-dialog-warning',role:'alert'},translate('dialog.deleteDirtyWarning')):null),h('div',{className:'dsh-wel-dialog-footer'},h('button',{className:'dsh-wel-text-button',disabled:busy,onClick:onCancel,type:'button'},translate('dialog.cancel')),h('button',{className:'dsh-wel-danger-button dsh-wel-text-button',disabled:busy,onClick:onConfirm,type:'button'},busy?translate('dialog.processing'):translate('dialog.deleteAction')))))}
+/* Save-time three-way merge conflict prompt: the file changed on disk by
+   another tool and the changes overlap the local edits. Shows each conflicting
+   region (mine vs theirs) and lets the user pick which version to keep. */
+function SaveConflictDialog({conflict,onResolve}){if(conflict===undefined)return null;return h('div',{className:'dsh-wel-dialog-backdrop',onMouseDown:e=>{if(e.target===e.currentTarget)onResolve('cancel')}},h('div',{'aria-modal':true,className:'dsh-wel-dialog',role:'dialog'},h('div',{className:'dsh-wel-dialog-header'},h('div',{className:'dsh-wel-dialog-title'},translate('dialog.saveConflictTitle')),h('button',{'aria-label':translate('dialog.close'),className:'dsh-wel-icon-button',onClick:()=>onResolve('cancel'),title:translate('dialog.close'),type:'button'},'×')),h('div',{className:'dsh-wel-dialog-body'},h('div',{className:'dsh-wel-dialog-message'},translate('dialog.saveConflictMessage')),conflict.conflicts.map((region,index)=>h('div',{className:'dsh-wel-conflict-region',key:index},h('div',{className:'dsh-wel-conflict-region-title'},translate('dialog.saveConflictRegion',{lines:region.start===region.end-1?String(region.start+1):`${region.start+1}–${region.end}`})),h('div',{className:'dsh-wel-conflict-cols'},h('div',{className:'dsh-wel-conflict-col dsh-wel-conflict-mine'},h('div',{className:'dsh-wel-conflict-col-label'},translate('dialog.saveConflictMine')),h('pre',{className:'dsh-wel-conflict-code'},region.mine.join('\n'))),h('div',{className:'dsh-wel-conflict-col dsh-wel-conflict-theirs'},h('div',{className:'dsh-wel-conflict-col-label'},translate('dialog.saveConflictTheirs')),h('pre',{className:'dsh-wel-conflict-code'},region.theirs.join('\n'))))))),h('div',{className:'dsh-wel-dialog-footer'},h('button',{className:'dsh-wel-text-button',onClick:()=>onResolve('cancel'),type:'button'},translate('dialog.cancel')),h('button',{className:'dsh-wel-text-button',onClick:()=>onResolve('theirs'),type:'button'},translate('dialog.saveConflictKeepTheirs')),h('button',{className:'dsh-wel-danger-button dsh-wel-text-button',onClick:()=>onResolve('mine'),type:'button'},translate('dialog.saveConflictKeepMine')))))}
 
 function revealPosition(view, reveal) {
   const lineNumber = Math.min(Math.max(1, reveal.line), view.state.doc.lines)
@@ -2864,7 +3179,7 @@ function CodeEditor({ file, editing, wrap, onContext, onDirty, onSaveShortcut, o
 }
 
 function WorkspaceExplorer({
-  workspace, treePortalTarget, sessionTitle, sessionId, renameSession, publishEditorContext, listDirectory, readFile, saveFile, createEntry, renameEntry, storedDraft, storedPreviewSession, persistDraft, persistPreviewSession, clearDraft, settingsStore,
+  workspace, treePortalTarget, sessionTitle, sessionId, renameSession, publishEditorContext, listDirectory, readFile, saveFile, createEntry, renameEntry, storedDraft, storedPreviewSession, persistDraft, persistPreviewSession, clearDraft, settingsStore, loadDraft, persistDraftFile, removeDraftFile,
 }) {
   const settings = useSyncExternalStore(settingsStore.subscribe, settingsStore.getSnapshot)
   const initialPreviewSession = previewSessionWithDraft(storedPreviewSession, storedDraft)
@@ -2913,6 +3228,7 @@ function WorkspaceExplorer({
   const [clipboard, setClipboard] = useState()
   const [deleteDialog, setDeleteDialog] = useState()
   const [deleteBusy, setDeleteBusy] = useState(false)
+  const [conflictDialog, setConflictDialog] = useState()
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchCaseSensitive, setSearchCaseSensitive] = useState(false)
@@ -2946,6 +3262,13 @@ function WorkspaceExplorer({
   const diskBaseRef = useRef('')
   const mounted = useRef(true)
   const latestDraft = useRef(undefined)
+  // Latest disk state this editor actually wrote (or last read): content plus
+  // revision. Auto-save uses the revision as If-Match and the editor-context
+  // uses the content to decide whether a selection matches disk. Per-path,
+  // because a pending auto-save can outlive the active tab.
+  const lastWriteRef = useRef(new Map())
+  const autosaveTimers = useRef(new Map())
+  const conflictDialogRef = useRef(undefined)
   const tabsRef = useRef(initialPreviewSession.tabs)
   const activePathRef = useRef(initialPreviewSession.activePath)
   const expandedRef = useRef(new Set(['', ...(initialPreviewSession.expanded ?? [])]))
@@ -3039,6 +3362,10 @@ function WorkspaceExplorer({
             text: state.sliceDoc(main.from, main.to),
           }
         })()
+    // Dirty means "differs from the committed snapshot". The source file is
+    // never polluted by the draft (edits live in the draft file), so a clean
+    // selection can be verified against the source revision; a dirty editor
+    // sends the selection text verbatim instead of verifying against disk.
     publishEditorContext({
       workspaceId: String(workspace.workspaceId),
       path: activeTab.path,
@@ -3062,18 +3389,13 @@ function WorkspaceExplorer({
     if (view !== undefined) publishContextState(view.state)
   }, [preview, publishContextState])
 
-  latestDraft.current = dirty && preview.state === 'ready' && activeTab !== undefined
-    ? {
-        path: activeTab.path,
-        name: activeTab.name,
-        content: draft,
-        baseContent: baseText.current,
-        revision: preview.revision ?? null,
-        bom: Boolean(preview.bom),
-        lineEnding: preview.lineEnding ?? 'none',
-        size: Number.isFinite(preview.size) ? preview.size : null,
-      }
-    : undefined
+  // The workspace-draft (layout-store) fallback is retired: the staging draft
+  // file is now the authoritative draft store, and writing the layout store's
+  // drafts on every unmount re-rendered AppFrame (panels.drafts changed),
+  // which remounted WorkspaceExplorer and aborted every in-flight request in
+  // an endless loop. Keep the ref (other paths still clear it) but never
+  // populate it.
+  latestDraft.current = undefined
 
   const abortDirectoryRequests = useCallback(() => {
     for (const controller of requests.current.values()) controller.abort()
@@ -3085,33 +3407,6 @@ function WorkspaceExplorer({
     saveController.current?.abort()
     mutationController.current?.abort()
   }, [abortDirectoryRequests])
-
-  useEffect(() => {
-    mounted.current = true
-    return () => {
-      persistSessionTabs()
-      const value = latestDraft.current
-      if (value !== undefined) persistDraft(value)
-      mounted.current = false
-      clearTimeout(copyNoticeTimer.current)
-      searchController.current?.abort()
-      publishEditorContext(undefined)
-      abortRequests()
-    }
-  }, [abortRequests, persistDraft, persistSessionTabs, publishEditorContext])
-
-  // Navigation never unmounts React, so the unmount cleanup above cannot cover
-  // a refresh or tab close. Persist the final tab session synchronously on
-  // page hide/unload (localStorage writes are synchronous and safe here).
-  useEffect(() => {
-    const flush = () => { persistSessionTabs() }
-    window.addEventListener('pagehide', flush)
-    window.addEventListener('beforeunload', flush)
-    return () => {
-      window.removeEventListener('pagehide', flush)
-      window.removeEventListener('beforeunload', flush)
-    }
-  }, [persistSessionTabs])
 
   useEffect(() => {
     if (!hasDirtyTabs) return undefined
@@ -3503,69 +3798,88 @@ function WorkspaceExplorer({
       // stale result would flash the wrong file and bump the read epoch.
       if (!mounted.current || activePathRef.current !== activePath) return
       requestedEncodingRef.current = undefined
-      const stored = tab?.dirty ? tab : undefined
-      const canRestore = stored !== undefined
-        && result.editable !== false
-        && !result.readOnlyReason
-        && !result.truncated
-        && result.lineEnding !== 'mixed'
-      // A draft that cannot be restored (file became read-only, oversized,
-      // truncated, mixed line endings) is still shown: it is the user's only
-      // copy of their unsaved work. It is marked clean so the tab stays
-      // closable — the draft cannot be saved anyway — and the status says so.
-      const content = stored !== undefined ? stored.draft : result.content
-      const ready = {
-        state: 'ready',
-        ...result,
-        name: selection.name,
-        path: activePath,
-        symlink: Boolean(selection.symlink),
-        content,
-        revision: canRestore ? stored.revision : result.revision,
-        encoding: result.encoding ?? effectiveEncoding,
-        lineEnding: result.lineEnding ?? 'none',
-        bom: Boolean(result.bom),
-        size: result.size,
-      }
-      const restoredStatus = canRestore && stored.revision !== null && stored.revision !== undefined && result.revision !== stored.revision
-        ? { error: true, text: translate('status.draftRestoredConflict') }
-        : { text: translate('status.draftRestored') }
-      const notRestorableStatus = stored !== undefined
-        ? { error: true, text: translate('status.draftNotRestorable') }
-        : undefined
-      // The disk content (as last read) stays separate from the editing
-      // baseline: cancel restores the disk truth even when a draft restore
-      // happened with a stale base.
-      diskBaseRef.current = result.content
-      baseText.current = canRestore ? stored.baseText : result.content
-      setDraft(content)
-      setPreview(ready)
-      setEditing(canRestore ? true : (stored !== undefined ? false : Boolean(tab?.editing)))
-      setDirty(canRestore ? true : (stored !== undefined ? false : Boolean(tab?.dirty)))
-      if (canRestore) {
-        setStatus(restoredStatus)
-        if (storedDraft?.path === activePath) clearDraft()
-      } else if (stored !== undefined) {
-        setStatus(notRestorableStatus)
-        if (storedDraft?.path === activePath) clearDraft()
-      }
-      if (refreshPending) setStatus({ text: translate('editor.refreshed') })
-      setReadEpoch(epoch => epoch + 1)
-      updateTab(activePath, {
-        baseText: canRestore ? stored.baseText : result.content,
-        bom: Boolean(result.bom),
-        dirty: canRestore ? true : (stored !== undefined ? false : Boolean(tab?.dirty)),
-        draft: content,
-        editing: canRestore ? true : (stored !== undefined ? false : Boolean(tab?.editing)),
-        encoding: result.encoding ?? effectiveEncoding,
-        lineEnding: result.lineEnding ?? 'none',
-        name: selection.name,
-        revision: (canRestore ? stored.revision : result.revision) ?? null,
-        saving: false,
-        scrollTop: tab?.scrollTop ?? 0,
-        size: Number.isFinite(result.size) ? result.size : null,
-        status: refreshPending ? { text: translate('editor.refreshed') } : (canRestore ? restoredStatus : (stored !== undefined ? notRestorableStatus : tab?.status)),
-        symlink: Boolean(selection.symlink),
+      // Read the draft file (staging content + snapshot) so a refresh restores
+      // the editing session from disk rather than localStorage. A failed draft
+      // read is non-critical: fall back to legacy persisted content or source.
+      return loadDraft(workspace.workspaceId, activePath, controller.signal).catch(() => ({ exists: false })).then((draftData) => {
+        if (!mounted.current || activePathRef.current !== activePath) return
+        const stored = tab?.dirty ? tab : undefined
+        const editable = result.editable === true
+        const hasDiskDraft = draftData !== null && typeof draftData === 'object'
+          && draftData.exists !== false && typeof draftData.draft === 'string'
+        const hasStoredContent = stored !== undefined && typeof stored.draft === 'string' && stored.draft !== ''
+        const restored = hasDiskDraft
+          ? {
+              content: draftData.draft,
+              baseText: typeof draftData.baseText === 'string' ? draftData.baseText : result.content,
+              baseRevision: typeof draftData.baseRevision === 'string' ? draftData.baseRevision : result.revision,
+            }
+          : hasStoredContent
+            ? { content: stored.draft, baseText: stored.baseText, baseRevision: stored.revision }
+            : { content: result.content, baseText: result.content, baseRevision: result.revision }
+        const content = restored.content
+        const canRestore = (hasDiskDraft || hasStoredContent) && editable
+        // Compare the SOURCE content to the snapshot: when the source changed
+        // since the snapshot (by an external tool), restore still shows the
+        // draft and defers to the save-time three-way merge.
+        const diskText = typeof result.content === 'string' ? result.content : ''
+        const externallyChanged = canRestore && diskText !== restored.baseText
+        const ready = {
+          state: 'ready',
+          ...result,
+          name: selection.name,
+          path: activePath,
+          symlink: Boolean(selection.symlink),
+          content,
+          revision: result.revision ?? null,
+          encoding: result.encoding ?? effectiveEncoding,
+          lineEnding: result.lineEnding ?? 'none',
+          bom: Boolean(result.bom),
+          size: result.size,
+        }
+        const restoredStatus = canRestore && externallyChanged
+          ? { error: true, text: translate('status.draftRestoredConflict') }
+          : { text: translate('status.draftRestored') }
+        const notRestorableStatus = (hasDiskDraft || hasStoredContent) && !editable
+          ? { error: true, text: translate('status.draftNotRestorable') }
+          : undefined
+        // The source content (as last read) stays separate from the editing
+        // baseline: cancel restores the committed snapshot even when a draft
+        // restore happened with a stale base.
+        diskBaseRef.current = result.content
+        baseText.current = restored.baseText
+        // Seed the auto-save dedup with the restored draft content (or source
+        // content when clean) so the next auto-save only fires after an edit.
+        lastWriteRef.current.set(activePath, { revision: null, content })
+        setDraft(content)
+        setPreview(ready)
+        setEditing(editable)
+        setDirty(canRestore ? content !== restored.baseText : Boolean(tab?.dirty))
+        if (canRestore) {
+          setStatus(restoredStatus)
+          if (storedDraft?.path === activePath) clearDraft()
+        } else if (hasDiskDraft || hasStoredContent) {
+          setStatus(notRestorableStatus)
+          if (storedDraft?.path === activePath) clearDraft()
+        }
+        if (refreshPending) setStatus({ text: translate('editor.refreshed') })
+        setReadEpoch(epoch => epoch + 1)
+        updateTab(activePath, {
+          baseText: restored.baseText,
+          bom: Boolean(result.bom),
+          dirty: canRestore ? content !== restored.baseText : Boolean(tab?.dirty),
+          draft: content,
+          editing: editable,
+          encoding: result.encoding ?? effectiveEncoding,
+          lineEnding: result.lineEnding ?? 'none',
+          name: selection.name,
+          revision: result.revision ?? null,
+          saving: false,
+          scrollTop: tab?.scrollTop ?? 0,
+          size: Number.isFinite(result.size) ? result.size : null,
+          status: refreshPending ? { text: translate('editor.refreshed') } : (canRestore ? restoredStatus : ((hasDiskDraft || hasStoredContent) ? notRestorableStatus : tab?.status)),
+          symlink: Boolean(selection.symlink),
+        })
       })
     }, (error) => {
       if (error?.name !== 'AbortError' && activePathRef.current === activePath) {
@@ -3578,7 +3892,166 @@ function WorkspaceExplorer({
     // The workspace draft arrives with the first render (the layout store is
     // synchronous), never late, so it must not be a dependency: the restore
     // path clears the draft, and that change must not re-read the file.
-  }, [activePath, clearDraft, publishEditorContext, readFile, reloadToken, updateTab, workspace.workspaceId])
+  }, [activePath, clearDraft, loadDraft, publishEditorContext, readFile, reloadToken, updateTab, workspace.workspaceId])
+
+  /* After committing `content` to the source file, remove the staging draft so
+     a later refresh does not resurrect it. If the removal fails (rare), leave a
+     CLEAN draft (baseText === draft === content, fresh revision) so the next
+     restore sees no unsaved state either way. */
+  const clearDraftFile = useCallback(async (path, content, encoding, lineEnding, bom, revision) => {
+    try {
+      const result = await removeDraftFile(workspace.workspaceId, path, undefined)
+      if (result?.deleted === true) return
+    } catch {
+      // fall through to the clean-draft write below
+    }
+    await persistDraftFile(workspace.workspaceId, path, {
+      encoding,
+      lineEnding,
+      bom,
+      baseText: content,
+      baseRevision: revision,
+      draft: content,
+    }, undefined).catch(() => {})
+  }, [persistDraftFile, removeDraftFile, workspace.workspaceId])
+
+  /* Write `content` to the SOURCE file for `path` and mark the tab committed
+     (clean). Used by the explicit save, the clean three-way merge, and the
+     conflict resolution. Returns true on success; throws on failure. */
+  const commitTab = useCallback(async (path, content, revision, encoding, statusText) => {
+    const tab = tabsRef.current.find(item => item.path === path)
+    if (tab === undefined) return false
+    const controller = new AbortController()
+    saveController.current = controller
+    try {
+      const result = await saveFile(workspace.workspaceId, path, content, revision, controller.signal, encoding)
+      if (!mounted.current) return false
+      const savedEncoding = result.encoding ?? encoding
+      const savedBom = Boolean(result.bom)
+      const size = Number.isFinite(result.size) ? result.size : new TextEncoder().encode(content).byteLength
+      const savedStatus = { text: statusText ?? translate('editor.saved') }
+      await clearDraftFile(path, content, savedEncoding, tab.lineEnding ?? 'none', savedBom, result.revision ?? revision)
+      if (!mounted.current) return false
+      lastWriteRef.current.set(path, { revision: null, content })
+      updateTab(path, {
+        baseText: content,
+        bom: savedBom,
+        dirty: false,
+        draft: content,
+        editing: true,
+        encoding: savedEncoding,
+        lineEnding: tab.lineEnding ?? 'none',
+        revision: result.revision ?? revision,
+        saving: false,
+        size,
+        status: savedStatus,
+        externalConflict: false,
+      })
+      if (activePathRef.current === path) {
+        baseText.current = content
+        diskBaseRef.current = content
+        setDraft(content)
+        setDirty(false)
+        setEditing(true)
+        latestDraft.current = undefined
+        clearDraft()
+        setPreview(current => current.state === 'ready' && current.path === path
+          ? { ...current, content, encoding: savedEncoding, bom: savedBom, revision: result.revision ?? current.revision, size }
+          : current)
+        setStatus(savedStatus)
+      }
+      return true
+    } finally {
+      if (saveController.current === controller) saveController.current = undefined
+    }
+  }, [activePathRef, clearDraft, clearDraftFile, saveFile, updateTab, workspace.workspaceId])
+
+  /* Auto-save one path's draft to the staging file (silent). The source file is
+     never touched here — only the explicit save merges the draft back. Never
+     clears the dirty marker. */
+  const performAutosave = useCallback(async (path, text) => {
+    const tab = tabsRef.current.find(item => item.path === path)
+    if (tab === undefined || tab.external || tab.saving || tab.editing !== true) return
+    const entry = lastWriteRef.current.get(path)
+    if (entry !== undefined && entry.content === text) return
+    const encoding = tab.encoding ?? 'utf-8'
+    try {
+      const payload = {
+        encoding,
+        lineEnding: tab.lineEnding ?? 'none',
+        bom: Boolean(tab.bom),
+        baseText: baseText.current,
+        baseRevision: preview.revision ?? null,
+        draft: text,
+      }
+      await persistDraftFile(workspace.workspaceId, path, payload, undefined)
+      if (!mounted.current) return
+      lastWriteRef.current.set(path, { revision: null, content: text })
+    } catch (error) {
+      if (error?.name === 'AbortError' || !mounted.current) return
+      const message = error instanceof Error ? error.message : String(error)
+      if (activePathRef.current === path) setStatus({ error: true, text: translate('editor.autosaveFailed', { message }) })
+    }
+  }, [activePathRef, baseText, persistDraftFile, preview, updateTab, workspace.workspaceId])
+
+  const scheduleAutosave = useCallback((path, text) => {
+    if (autosaveTimers.current.has(path)) clearTimeout(autosaveTimers.current.get(path))
+    const timer = setTimeout(() => {
+      autosaveTimers.current.delete(path)
+      void performAutosave(path, text)
+    }, AUTOSAVE_DELAY_MS)
+    autosaveTimers.current.set(path, timer)
+  }, [performAutosave])
+
+  const flushAutosaves = useCallback(() => {
+    for (const [path, timer] of autosaveTimers.current) {
+      clearTimeout(timer)
+      const tab = tabsRef.current.find(item => item.path === path)
+      if (tab !== undefined && tab.dirty) void performAutosave(path, tab.draft)
+    }
+    autosaveTimers.current.clear()
+  }, [performAutosave])
+
+  // The unmount cleanup must run exactly once per real unmount. flushAutosaves
+  // depends on performAutosave, which depends on the `preview` state, so its
+  // identity changes on every preview transition (idle -> loading -> ready);
+  // listing it in the dependency array would re-run this effect on every such
+  // transition and its cleanup aborts every in-flight request (the tree
+  // listing and the active file read), leaving both stuck at their loading
+  // states. Snapshot the cleanup callbacks in refs so the effect is stable.
+  const flushAutosavesRef = useRef(flushAutosaves)
+  flushAutosavesRef.current = flushAutosaves
+  const persistSessionTabsRef = useRef(persistSessionTabs)
+  persistSessionTabsRef.current = persistSessionTabs
+  const publishEditorContextRef = useRef(publishEditorContext)
+  publishEditorContextRef.current = publishEditorContext
+  const abortRequestsRef = useRef(abortRequests)
+  abortRequestsRef.current = abortRequests
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      flushAutosavesRef.current()
+      persistSessionTabsRef.current()
+      mounted.current = false
+      clearTimeout(copyNoticeTimer.current)
+      searchController.current?.abort()
+      publishEditorContextRef.current(undefined)
+      abortRequestsRef.current()
+    }
+  }, [])
+
+  // Navigation never unmounts React, so the unmount cleanup above cannot cover
+  // a refresh or tab close. Flush the pending auto-saves and persist the final
+  // tab session synchronously on page hide/unload.
+  useEffect(() => {
+    const flush = () => { flushAutosavesRef.current(); persistSessionTabsRef.current() }
+    window.addEventListener('pagehide', flush)
+    window.addEventListener('beforeunload', flush)
+    return () => {
+      window.removeEventListener('pagehide', flush)
+      window.removeEventListener('beforeunload', flush)
+    }
+  }, [])
 
   const save = useCallback(async (encodingOverride) => {
     if (preview.state !== 'ready' || saving || activeTab === undefined) return false
@@ -3590,37 +4063,51 @@ function WorkspaceExplorer({
     }
     const path = activeTab.path
     const encoding = forceSaveAs ? String(encodingOverride) : (preview.encoding ?? 'utf-8')
-    const controller = new AbortController()
-    saveController.current = controller
     const text = editorRef.current?.state.sliceDoc() ?? draft
     const savingStatus = { text: forceSaveAs ? translate('editor.savingWith', { encoding: encodingLabel(encoding) }) : translate('editor.saving') }
     setSaving(true)
     setStatus(savingStatus)
     updateTab(path, { draft: text, dirty: true, saving: true, status: savingStatus })
+    const savedStatusText = forceSaveAs ? translate('editor.savedAs', { encoding: encodingLabel(encoding) }) : translate('editor.saved')
     try {
-      const result = await saveFile(workspace.workspaceId, path, text, preview.revision, controller.signal, encoding)
+      // Authoritative current disk state: re-read before deciding how to write.
+      const disk = await readFile(workspace.workspaceId, path, undefined)
       if (!mounted.current) return false
-      const savedEncoding = result.encoding ?? encoding
-      const savedBom = Boolean(result.bom)
-      const size = Number.isFinite(result.size) ? result.size : new TextEncoder().encode(text).byteLength
-      const savedStatus = { text: forceSaveAs ? translate('editor.savedAs', { encoding: encodingLabel(savedEncoding) }) : translate('editor.saved') }
-      updateTab(path, { baseText: text, bom: savedBom, dirty: false, draft: text, editing: false, encoding: savedEncoding, lineEnding: preview.lineEnding ?? 'none', revision: result.revision ?? preview.revision ?? null, saving: false, size, status: savedStatus })
-      if (activePathRef.current === path) {
-        baseText.current = text
-        diskBaseRef.current = text
-        setDraft(text)
-        setDirty(false)
-        setEditing(false)
-        latestDraft.current = undefined
-        clearDraft()
-        setPreview(current => current.state === 'ready' && current.path === path
-          ? { ...current, content: text, encoding: savedEncoding, bom: savedBom, revision: result.revision ?? current.revision, size }
-          : current)
-        setStatus(savedStatus)
+      if (typeof disk?.content !== 'string') throw new Error('invalid read response')
+      const diskText = disk.content
+      const diskRevision = typeof disk?.revision === 'string' ? disk.revision : undefined
+      if (diskText === text) {
+        // The source already equals the current draft; commit as-is (the write
+        // is idempotent and also clears the staging draft).
+        return await commitTab(path, text, diskRevision ?? preview.revision, encoding, savedStatusText)
       }
-      return true
+      if (diskText === baseText.current) {
+        // The source is untouched since our snapshot: silent write-back.
+        return await commitTab(path, text, diskRevision ?? preview.revision, encoding, savedStatusText)
+      }
+      // The source changed externally → three-way merge against the snapshot.
+      const merged = threeWayMerge(baseText.current, text, diskText)
+      if (merged.status === 'clean') {
+        const ok = await commitTab(path, merged.merged, diskRevision ?? preview.revision, encoding, savedStatusText)
+        if (ok && activePathRef.current === path) {
+          // Show the merged result (it differs from both sides).
+          const view = editorRef.current
+          if (view !== undefined) {
+            view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: merged.merged } })
+          }
+        }
+        return ok
+      }
+      // Overlapping changes → ask the user to pick; keep the tab busy so no
+      // auto-save races the pending decision.
+      const dialog = { path, mine: text, theirs: diskText, diskRevision, encoding, savedStatusText, conflicts: merged.conflicts }
+      conflictDialogRef.current = dialog
+      setConflictDialog(dialog)
+      return false
     } catch (error) {
       if (error?.name === 'AbortError' || !mounted.current) return false
+      // A 409/412 race on the final write means the file changed mid-save: fall
+      // back to the same conflict messaging as a plain conflict.
       const failure = error?.status === 409 || error?.status === 412
         ? translate('editor.saveConflict')
         : translate('editor.saveFailed', { message: error instanceof Error ? error.message : String(error) })
@@ -3628,34 +4115,75 @@ function WorkspaceExplorer({
       if (activePathRef.current === path) setStatus({ error: true, text: failure })
       return false
     } finally {
-      if (saveController.current === controller) saveController.current = undefined
-      if (mounted.current) {
+      // Keep the tab busy while a conflict prompt is pending so no auto-save
+      // races the unresolved decision; resolveConflict releases it.
+      if (mounted.current && conflictDialogRef.current === undefined) {
         updateTab(path, { saving: false })
         if (activePathRef.current === path) setSaving(false)
       }
     }
-  }, [activeTab, clearDraft, dirty, draft, preview, saveFile, saving, updateTab, workspace.workspaceId])
+  }, [activeTab, baseText, commitTab, dirty, draft, preview, readFile, saveFile, saving, updateTab, workspace.workspaceId])
 
-  const cancel = useCallback(() => {
+  /* Resolve the pending save conflict: 'mine' overwrites the disk version,
+     'theirs' adopts the disk version and discards the local edits, 'cancel'
+     aborts the save and keeps editing. */
+  const resolveConflict = useCallback(async (choice) => {
+    const dialog = conflictDialogRef.current
+    if (dialog === undefined) return
+    conflictDialogRef.current = undefined
+    setConflictDialog(undefined)
+    const { path, mine, theirs, diskRevision, encoding, savedStatusText } = dialog
+    const tab = tabsRef.current.find(item => item.path === path)
+    if (tab === undefined) return
+    const finish = () => {
+      updateTab(path, { saving: false })
+      if (activePathRef.current === path) setSaving(false)
+    }
+    if (choice === 'cancel') {
+      setStatus({ text: translate('editor.saveCancelled') })
+      finish()
+      return
+    }
+    try {
+      const ok = choice === 'mine'
+        ? await commitTab(path, mine, diskRevision ?? tab.revision, encoding, savedStatusText)
+        : await commitTab(path, theirs, diskRevision ?? tab.revision, encoding, savedStatusText)
+      if (choice === 'theirs' && ok && activePathRef.current === path) {
+        // Adopting the disk version: show it in the editor.
+        const view = editorRef.current
+        if (view !== undefined) view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: theirs } })
+      }
+      if (!ok) setStatus({ error: true, text: translate('editor.saveConflict') })
+    } catch (error) {
+      if (error?.name === 'AbortError' || !mounted.current) return
+      const message = error instanceof Error ? error.message : String(error)
+      setStatus({ error: true, text: translate('editor.saveFailed', { message }) })
+    } finally {
+      finish()
+    }
+  }, [activePathRef, commitTab, updateTab])
+
+  const cancel = useCallback(async () => {
     if (preview.state !== 'ready' || saving || activeTab === undefined) return
-    // Restore the last-read disk content, not the (possibly stale) editing
-    // baseline: a draft restored after the disk changed must cancel back to
-    // the current on-disk truth.
+    if (!dirty) return
+    const path = activeTab.path
+    // Discard the working edits: restore the editor to the source as last read
+    // (the source was never polluted by the draft) and remove the staging
+    // draft file. The source file itself is not written.
+    const restored = diskBaseRef.current
     const state = editorRef.current?.state
-    const restoredText = diskBaseRef.current
-    editorRef.current?.dispatch({
-      changes: { from: 0, to: state?.doc.length ?? 0, insert: restoredText },
-    })
-    baseText.current = restoredText
-    setDraft(restoredText)
+    editorRef.current?.dispatch({ changes: { from: 0, to: state?.doc.length ?? 0, insert: restored } })
+    baseText.current = restored
+    setDraft(restored)
     setDirty(false)
-    setEditing(false)
     latestDraft.current = undefined
     clearDraft()
+    lastWriteRef.current.set(path, { revision: null, content: restored })
     const nextStatus = { text: translate('editor.cancelRestored') }
     setStatus(nextStatus)
-    updateTab(activeTab.path, { dirty: false, draft: restoredText, editing: false, status: nextStatus })
-  }, [activeTab, clearDraft, preview.state, saving, updateTab])
+    updateTab(path, { dirty: false, draft: restored, editing: true, status: nextStatus, revision: preview.revision ?? null })
+    await clearDraftFile(path, restored, preview.encoding ?? 'utf-8', preview.lineEnding ?? 'none', Boolean(preview.bom), preview.revision ?? null)
+  }, [activeTab, baseText, clearDraft, clearDraftFile, dirty, preview, saving, updateTab])
   const refresh=useCallback(()=>{if(hasDirtyTabs){setStatus({error:true,text:translate('editor.refreshBlocked')});return}abortDirectoryRequests();setEntryDialog(undefined);setEntryDraft('');setEntryError(undefined);composingRef.current=false;setDirectories(new Map());setExpanded(new Set(['']));setStatus(undefined);void loadDirectory('')},[abortDirectoryRequests,hasDirtyTabs,loadDirectory])
   const toggleDirectory=useCallback(entry=>{const path=entry.path;const opening=!expanded.has(path);setExpanded(cur=>{const next=new Set(cur);opening?next.add(path):next.delete(path);return next});if(opening){if(directories.get(path)?.state!=='ready')void loadDirectory(path);chooseDirectory(entry)}else setSelected(entry)},[chooseDirectory,directories,expanded,loadDirectory])
   const openContextMenu=useCallback((event,entry)=>{event.preventDefault();setSelected(entry);setContextMenu({entry,x:event.clientX,y:event.clientY})},[])
@@ -3925,8 +4453,10 @@ function WorkspaceExplorer({
       h('div', { className: 'dsh-wel-error-card' }, preview.message))
   } else {
     const highlightPreset = highlightPresetOf(settings, colorGroupOf({ kind: 'file', name: preview.name }))
+    const previewReason = readOnlyReason(preview)
     body = h(Fragment, null,
       preview.truncated ? h('div', { className: 'dsh-wel-banner' }, translate('editor.previewTruncated')) : null,
+      previewReason && !preview.truncated ? h('div', { className: 'dsh-wel-banner' }, translate('editor.cannotEdit', { reason: previewReason })) : null,
       status ? h('div', { className: 'dsh-wel-status', 'data-error': status.error || undefined }, status.text) : null,
       h('div', { className: 'dsh-wel-preview-search', ref: searchPanelContainerRef, onContextMenu: (event) => { if (event.button !== 2) event.preventDefault() } }),
       h('div', { className: 'dsh-wel-preview-body', onClick: () => { if (activePathRef.current !== null) scrollTabIntoView(activePathRef.current) } },
@@ -3946,6 +4476,14 @@ function WorkspaceExplorer({
             setDraft(text)
             setDirty(nextDirty)
             updateActiveTab({ dirty: nextDirty, draft: text })
+            if (nextDirty) {
+              scheduleAutosave(activePath, text)
+            } else {
+              // Reverted exactly to the snapshot: drop the staging draft so a
+              // later refresh does not resurrect the intermediate edits.
+              lastWriteRef.current.set(activePath, { revision: null, content: text })
+              void clearDraftFile(activePath, text, preview.encoding ?? 'utf-8', preview.lineEnding ?? 'none', Boolean(preview.bom), preview.revision ?? null)
+            }
           },
           onSaveShortcut: () => { if (editing && !saving) void save() },
           onScroll: (path, scrollTop) => { scrollTopRef.current.set(path, scrollTop) },
@@ -4049,7 +4587,7 @@ function WorkspaceExplorer({
         'aria-selected': tab.path === activePath,
         title: tab.path,
         type: 'button',
-      }, h('span', { className: 'dsh-wel-preview-tab-name' }, tab.name), tab.dirty ? h('span', { className: 'dsh-wel-dirty', title: translate('tab.dirty') }, '●') : null),
+      }, h('span', { className: 'dsh-wel-preview-tab-name' }, tab.name), tab.dirty ? h('span', { className: 'dsh-wel-dirty', title: translate('tab.dirty') }, '·') : null),
       tab.pinned
         ? h('button', {
           'aria-label': translate('tab.unpinAria', { name: tab.name }),
@@ -4142,6 +4680,7 @@ function WorkspaceExplorer({
     encodingMenu ? h(EncodingMenu, { canOpen: !dirty, canSave: preview.state === 'ready' && preview.editable !== false && !preview.readOnlyReason, menuRef: encodingMenuRef, onOpen: () => openEncodingDialog('open'), onSave: () => openEncodingDialog('save'), x: encodingMenu.x, y: encodingMenu.y }) : null,
     encodingDialog ? h(EncodingDialog, { busy: encodingDialog.mode === 'save' && saving, dialog: encodingDialog, onCancel: closeEncodingDialog, onConfirm: confirmEncodingDialog, onPick: setEncodingPick, options: encodingOptions, value: encodingPick }) : null,
     deleteDialog ? h(DeleteDialog, { busy: deleteBusy, dirtyWarning: tabs.some(tab => tab.dirty && (tab.path === deleteDialog.path || tab.path.startsWith(`${deleteDialog.path}/`))), entry: deleteDialog, onCancel: closeDeleteDialog, onConfirm: confirmDelete }) : null,
+    conflictDialog ? h(SaveConflictDialog, { conflict: conflictDialog, onResolve: resolveConflict }) : null,
     sessionRenameOpen ? h(SessionRenameDialog, {
       busy: sessionRenameBusy,
       draft: sessionRenameDraft,
@@ -4156,7 +4695,7 @@ function WorkspaceExplorer({
       tabContextMenu ? h(TabContextMenu, { menuRef: tabMenuRef, onCloseOthers: () => { setTabContextMenu(undefined); closeOtherTabs(tabContextMenu.path) }, onTogglePin: () => { setTabContextMenu(undefined); if (tabMenuTarget?.pinned) unpinTab(tabContextMenu.path); else pinTab(tabContextMenu.path) }, pinned: Boolean(tabMenuTarget?.pinned), x: tabContextMenu.x, y: tabContextMenu.y }) : null,
       h('header', { className: 'dsh-wel-panel-header', onContextMenu: (event) => { event.preventDefault(); if (preview.state === 'ready' && activeTab !== undefined && !activeTab.external) setEncodingMenu({ x: event.clientX, y: event.clientY }) }, ref: previewHeaderRef },
         h('div', { className: 'dsh-wel-panel-title' },
-          h('strong', { title: activeTab?.external ? activeTab.name : (activeTab?.path ?? translate('panel.filePreview')) }, activeTab?.name ?? translate('panel.filePreview')),
+          h('strong', { title: activeTab?.external ? activeTab.name : (activeTab?.path ?? translate('panel.filePreview')) }, activeTab?.name ?? translate('panel.filePreview'), dirty ? h('span', { className: 'dsh-wel-dirty', title: translate('tab.dirty') }, '·') : null),
           h('div', { className: 'dsh-wel-preview-header-meta' },
             activeTab
               ? (activeTab.external
@@ -4166,7 +4705,6 @@ function WorkspaceExplorer({
             activeTab ? h('span', { className: 'dsh-wel-language' }, fileLabel(activeTab.name)) : null,
             size ? h('span', null, size) : null,
             preview.state === 'ready' && preview.encoding ? h('span', { className: 'dsh-wel-encoding', title: translate('encoding.badge') }, encodingLabel(preview.encoding)) : null,
-            dirty ? h('span', { className: 'dsh-wel-dirty', title: translate('tab.dirty') }, '●') : null,
           ),
         ),
         preview.state === 'ready'
@@ -4186,12 +4724,12 @@ function WorkspaceExplorer({
               title: settings.wrap === true ? translate('editor.wrap.off.title') : translate('editor.wrap.on.title'),
               type: 'button',
             }, translate('editor.wrap')),
-            editing
+            reason === null
               ? h(Fragment, null,
-                h('button', { className: 'dsh-wel-text-button', disabled: saving, onClick: cancel, type: 'button' }, translate('editor.cancel')),
+                h('button', { className: 'dsh-wel-text-button', disabled: !dirty || saving, onClick: cancel, type: 'button' }, translate('editor.cancel')),
                 h('button', { className: 'dsh-wel-text-button', disabled: !dirty || saving, onClick: () => void save(), type: 'button' }, saving ? translate('editor.saving') : translate('editor.save')),
               )
-              : h('button', { className: 'dsh-wel-text-button', disabled: Boolean(reason), onClick: () => { if (reason) { setStatus({ error: true, text: translate('editor.cannotEdit', { reason }) }); return } setEditing(true); const entered = translate('editor.entered'); setStatus({ text: entered }); updateActiveTab({ editing: true, status: { text: entered } }); editorRef.current?.focus() }, title: reason ? translate('editor.cannotEdit', { reason }) : translate('editor.edit.title'), type: 'button' }, translate('editor.edit')),
+              : null,
           )
           : null,
       ),
@@ -4359,6 +4897,132 @@ function EmptyWorkspaceExplorer({ treePortalTarget, sessionTitle }) {
     ),
     h('div', { className: 'dsh-wel-settings-hint' }, translate('settings.hint')),
   )
+}
+/* The session-switcher dropdown: rendered in the conversation header's action
+   row (order -400, leftmost) as the visible session title — the harness's
+   current-title crumb is hidden by CSS (desktop and mobile). Clicking the
+   trigger opens a portalled panel listing every session (most recently
+   updated first, the current one highlighted, each row showing the session
+   title with its workspace name as a distinguishing suffix); clicking a row
+   switches to that session through the same ctx.sessions.open the sidebar
+   list uses. The panel is portalled to document.body and fixed-positioned
+   from the trigger rect, so the chat column's overflow cannot clip it. */
+function SessionSwitcherDropdown({ useSessions, useWorkspaces, sessionId, openSession }) {
+  const list = useSessions(state => state)
+  const workspaces = useWorkspaces(state => state.items)
+  const [open, setOpen] = useState(false)
+  const triggerRef = useRef(null)
+  const panelRef = useRef(null)
+  const [pos, setPos] = useState(null)
+  /* The panel is as wide as 33% of the conversation column (the chat section
+     that owns the header), re-measured on open and while open on resize so
+     the width tracks live layout changes. The 360px floor keeps the panel at
+     a readable minimum even when 33% of a narrow column would be smaller. */
+  const measurePos = useCallback(() => {
+    const trigger = triggerRef.current
+    if (trigger === null) return null
+    const rect = trigger.getBoundingClientRect()
+    const chat = trigger.closest('.dsh-wel-chat')
+    const chatRect = chat?.getBoundingClientRect()
+    const width = chatRect !== undefined && chatRect.width > 0
+      ? Math.max(360, Math.round(chatRect.width * 0.33))
+      : Math.max(360, rect.width)
+    // Keep the panel horizontally inside the conversation column. In mobile
+    // the header's two leading icons push the trigger right, so the wide
+    // (360px floor) panel anchored at the trigger would overflow the phone
+    // column; clamping the left edge makes it lean left to stay on screen.
+    // On desktop the trigger sits near the column's left, so the clamp is a
+    // no-op and the panel hangs straight under the title.
+    const left = chatRect !== undefined && chatRect.width > 0
+      ? Math.max(chatRect.left + 4, Math.min(rect.left, chatRect.right - width - 4))
+      : rect.left
+    return { left, top: rect.bottom + 6, width }
+  }, [])
+  const toggle = useCallback(() => {
+    setOpen(prev => {
+      if (prev) return false
+      const next = measurePos()
+      if (next === null) return false
+      setPos(next)
+      return true
+    })
+  }, [measurePos])
+  useEffect(() => {
+    if (!open) return undefined
+    const inside = event => {
+      const trigger = triggerRef.current
+      const panel = panelRef.current
+      if (trigger !== null && event.target instanceof Node && trigger.contains(event.target)) return true
+      return panel !== null && event.target instanceof Node && panel.contains(event.target)
+    }
+    const close = () => setOpen(false)
+    const onPointerDown = event => { if (!inside(event)) close() }
+    const onKeyDown = event => { if (event.key === 'Escape') close() }
+    // Re-anchor on resize instead of closing, so the 33%-of-column width keeps
+    // tracking layout changes while the panel stays open.
+    const onResize = () => { const next = measurePos(); if (next !== null) setPos(next) }
+    window.addEventListener('pointerdown', onPointerDown)
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('resize', onResize)
+    window.addEventListener('scroll', close, true)
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('resize', onResize)
+      window.removeEventListener('scroll', close, true)
+    }
+  }, [measurePos, open])
+  const currentTitle = sessionId === undefined
+    ? undefined
+    : (list.byId[sessionId]?.displayTitle ?? String(sessionId))
+  const rows = useMemo(() => {
+    const workspaceTitleBySession = new Map()
+    for (const item of workspaces) {
+      for (const id of item.sessionIds) {
+        if (!workspaceTitleBySession.has(id)) workspaceTitleBySession.set(id, item.title)
+      }
+    }
+    const ordered = list.ids
+      .filter(id => list.byId[id] !== undefined)
+      .map(id => ({ summary: list.byId[id], workspaceTitle: workspaceTitleBySession.get(id) }))
+      .sort((a, b) => b.summary.updatedAt - a.summary.updatedAt)
+    return ordered
+  }, [list, workspaces])
+  const trigger = h('button', {
+    'aria-expanded': open,
+    'aria-haspopup': 'listbox',
+    'aria-label': translate('switcher.aria'),
+    className: 'dsh-wel-session-switcher-trigger',
+    onClick: toggle,
+    ref: triggerRef,
+    title: translate('switcher.trigger.title'),
+    type: 'button',
+  },
+    h('span', { className: 'dsh-wel-session-switcher-title' }, currentTitle ?? ''),
+    h('span', { className: 'dsh-wel-chevron' }, open ? '▲' : '▼'))
+  const panel = open && pos !== null ? createPortal(
+    h('div', {
+      className: 'dsh-wel-session-switcher-panel',
+      ref: panelRef,
+      role: 'listbox',
+      style: { left: pos.left, top: pos.top, width: pos.width },
+    },
+      rows.length === 0 ? h('div', { className: 'dsh-wel-session-switcher-empty' }, translate('switcher.noSessions'))
+        : rows.map(row => h('button', {
+          'aria-selected': row.summary.id === sessionId,
+          className: row.summary.id === sessionId ? 'dsh-wel-session-switcher-row dsh-wel-session-switcher-current' : 'dsh-wel-session-switcher-row',
+          key: row.summary.id,
+          onClick: () => { openSession(row.summary.id); setOpen(false) },
+          role: 'option',
+          type: 'button',
+        },
+          h('span', { className: 'dsh-wel-session-switcher-row-main' },
+            row.summary.displayTitle,
+            row.summary.origin === 'subagent' ? h('span', { className: 'dsh-wel-session-switcher-badge' }, translate('switcher.subagent')) : null),
+          row.workspaceTitle !== undefined ? h('span', { className: 'dsh-wel-session-switcher-row-ws' }, row.workspaceTitle) : null))),
+    document.body,
+  ) : null
+  return h('div', { className: 'dsh-wel-session-switcher' }, trigger, panel)
 }
 /* The sidebar-footer mobile-mode toggle: a compact button that turns the
    whole layout into the centered phone column. Entering mobile opens the
@@ -4557,9 +5221,9 @@ function AppFrame(props) {
     if (workspaceId !== undefined) keys.add(String(workspaceId))
     if (keys.size === 0) return
     const keySet = [...keys].sort().join('|')
-    const serialized = JSON.stringify(value)
-    if (lastPersistedSnapshotRef.current.get(keySet) === serialized) return
-    lastPersistedSnapshotRef.current.set(keySet, serialized)
+    const fingerprint = previewSnapshotFingerprint(value)
+    if (lastPersistedSnapshotRef.current.get(keySet) === fingerprint) return
+    lastPersistedSnapshotRef.current.set(keySet, fingerprint)
     if (lastPersistedSnapshotRef.current.size > 128) lastPersistedSnapshotRef.current.clear()
     for (const key of keys) props.previewSessionsStore.actions.rememberPreviewSession(key, value)
   }, [currentSession, previewSessionKey, props.previewSessionsStore, workspaceId])
@@ -4830,7 +5494,7 @@ function AppFrame(props) {
   const preview = filesActive || panes.explorerOpen ? clamp(panes.preview ?? PREVIEW_DEFAULT, PREVIEW_MIN, previewMax) : 0
   const previewBoundary = sidebar + preview
   const treePortalTarget = sidebarChrome?.files ?? null
-  return h('div',{ref:viewportRef,className:'dsh-wel-viewport'},h('main',{className:'dsh-wel-frame','data-explorer-closed':!panes.explorerOpen&&!filesActive||undefined,'data-sidebar-collapsed':collapsed||undefined,'data-sidebar-files':filesActive||undefined,'data-resizing':resizing||undefined,style:{'--dsh-wel-preview':`${preview}px`,'--dsh-wel-sidebar':`${sidebar}px`,'--dsh-wel-row-height':`${clamp(settings.rowHeight ?? ROW_HEIGHT_DEFAULT, ROW_HEIGHT_MIN, ROW_HEIGHT_MAX)}px`,'--dsh-wel-chat-font-scale':String(chatFontScale),'--dsh-wel-mobile-header-h':`${mobileHeaderHeight}px`,...fileColorVars}},h('aside',{className:'dsh-wel-sidebar',ref:asideRef},props.renderSlot('sidebar',{collapsed,width:sidebar}),sidebarChrome?.top?createPortal(h(SidebarTopActions,{collapsed,view,width:sidebar,onSelectSessions:()=>{props.actions.setView('sessions')},onSelectFiles:()=>{if(collapsed)props.toggleSidebar();props.actions.setView('files')}}),sidebarChrome.top):null),workspace?h(WorkspaceExplorer,{key:previewSessionKey ?? workspace.workspaceId,clearDraft:clearWorkspaceDraft,createEntry:props.createEntry,listDirectory:props.listDirectory,persistDraft:persistWorkspaceDraft,persistPreviewSession,publishEditorContext,readFile:props.readFile,renameEntry:props.renameEntry,saveFile:props.saveFile,settingsStore:props.settingsStore,storedDraft:panels.drafts[String(workspace.workspaceId)],storedPreviewSession,sessionTitle,sessionId,renameSession:props.renameSession,treePortalTarget,workspace}):h(EmptyWorkspaceExplorer,{sessionTitle,treePortalTarget}),h('section',{className:'dsh-wel-chat',ref:chatSectionRef},props.renderSlot('conversation',{}),chatDropActive?h('div',{className:'dsh-wel-chat-drop-mask',role:'presentation'},h('button',{'aria-label':translate('drop.closeAria'),className:'dsh-wel-chat-drop-close',onClick:()=>{chatDropSuppressed.current=true;setChatDropActive(false)},title:translate('drop.closeTitle'),type:'button'},'×'),h('div',{className:'dsh-wel-chat-drop-card'},translate('drop.releaseImages'))):null),!collapsed?h(ResizeHandle,{label:translate('resize.sidebar'),left:sidebar,max:sidebarMax,min:SIDEBAR_MIN,onDragging:setResizing,onResize:width=>props.actions.setSidebar(width,sidebarMax),value:sidebar}):null,(panes.explorerOpen||filesActive)?h(ResizeHandle,{label:translate('resize.preview'),left:previewBoundary,max:previewMax,min:PREVIEW_MIN,onDragging:setResizing,onResize:width=>props.explorerPaneStore.actions.setPreview(width,previewMax),value:preview}):null,h('aside',{className:'dsh-wel-details','data-closed':!panels.detailsOpen||!detailsCapable||undefined},props.renderSlot('details',{})),mobile.on&&mobile.drawerOpen?h('div',{className:'dsh-wel-mobile-scrim',onClick:()=>setDrawerOpen(false)}):null,h('div',{className:'dsh-wel-overlay','data-shell-overlay':true},props.renderSlot('shell.overlay',{}))))}
+  return h('div',{ref:viewportRef,className:'dsh-wel-viewport'},h('main',{className:'dsh-wel-frame','data-explorer-closed':!panes.explorerOpen&&!filesActive||undefined,'data-sidebar-collapsed':collapsed||undefined,'data-sidebar-files':filesActive||undefined,'data-resizing':resizing||undefined,style:{'--dsh-wel-preview':`${preview}px`,'--dsh-wel-sidebar':`${sidebar}px`,'--dsh-wel-row-height':`${clamp(settings.rowHeight ?? ROW_HEIGHT_DEFAULT, ROW_HEIGHT_MIN, ROW_HEIGHT_MAX)}px`,'--dsh-wel-chat-font-scale':String(chatFontScale),'--dsh-wel-mobile-header-h':`${mobileHeaderHeight}px`,...fileColorVars}},h('aside',{className:'dsh-wel-sidebar',ref:asideRef},props.renderSlot('sidebar',{collapsed,width:sidebar}),sidebarChrome?.top?createPortal(h(SidebarTopActions,{collapsed,view,width:sidebar,onSelectSessions:()=>{props.actions.setView('sessions')},onSelectFiles:()=>{if(collapsed)props.toggleSidebar();props.actions.setView('files')}}),sidebarChrome.top):null),workspace?h(WorkspaceExplorer,{key:workspace.workspaceId,clearDraft:clearWorkspaceDraft,createEntry:props.createEntry,listDirectory:props.listDirectory,persistDraft:persistWorkspaceDraft,persistPreviewSession,publishEditorContext,readFile:props.readFile,renameEntry:props.renameEntry,saveFile:props.saveFile,loadDraft:props.loadDraft,persistDraftFile:props.persistDraftFile,removeDraftFile:props.removeDraftFile,settingsStore:props.settingsStore,storedDraft:panels.drafts[String(workspace.workspaceId)],storedPreviewSession,sessionTitle,sessionId,renameSession:props.renameSession,treePortalTarget,workspace}):h(EmptyWorkspaceExplorer,{sessionTitle,treePortalTarget}),h('section',{className:'dsh-wel-chat',ref:chatSectionRef},props.renderSlot('conversation',{}),chatDropActive?h('div',{className:'dsh-wel-chat-drop-mask',role:'presentation'},h('button',{'aria-label':translate('drop.closeAria'),className:'dsh-wel-chat-drop-close',onClick:()=>{chatDropSuppressed.current=true;setChatDropActive(false)},title:translate('drop.closeTitle'),type:'button'},'×'),h('div',{className:'dsh-wel-chat-drop-card'},translate('drop.releaseImages'))):null),!collapsed?h(ResizeHandle,{label:translate('resize.sidebar'),left:sidebar,max:sidebarMax,min:SIDEBAR_MIN,onDragging:setResizing,onResize:width=>props.actions.setSidebar(width,sidebarMax),value:sidebar}):null,(panes.explorerOpen||filesActive)?h(ResizeHandle,{label:translate('resize.preview'),left:previewBoundary,max:previewMax,min:PREVIEW_MIN,onDragging:setResizing,onResize:width=>props.explorerPaneStore.actions.setPreview(width,previewMax),value:preview}):null,h('aside',{className:'dsh-wel-details','data-closed':!panels.detailsOpen||!detailsCapable||undefined},props.renderSlot('details',{})),mobile.on&&mobile.drawerOpen?h('div',{className:'dsh-wel-mobile-scrim',onClick:()=>setDrawerOpen(false)}):null,h('div',{className:'dsh-wel-overlay','data-shell-overlay':true},props.renderSlot('shell.overlay',{}))))}
 
 export const inject = ['slots', 'theme', 'sessions']
 export function apply(ctx) {
@@ -4876,6 +5540,9 @@ export function apply(ctx) {
   const listDirectory = (workspaceId, path, signal) => requestJson('tree', String(workspaceId), path, signal)
   const readFile = (workspaceId, path, signal, encoding) => requestJson('file', String(workspaceId), path, signal, encoding)
   const saveFile = (workspaceId, path, content, revision, signal, encoding) => putFile(workspaceId, path, content, revision, signal, encoding)
+  const loadDraft = (workspaceId, path, signal) => readDraft(String(workspaceId), path, signal)
+  const persistDraftFile = (workspaceId, path, payload, signal) => writeDraft(String(workspaceId), path, payload, signal)
+  const removeDraftFile = (workspaceId, path, signal) => deleteDraft(String(workspaceId), path, signal)
 
   ctx.effect(() => {
     const disposeService = ctx.reflect.provide('layout', layout)
@@ -4901,6 +5568,9 @@ export function apply(ctx) {
           explorerPaneStore,
           previewSessionsStore,
           saveFile,
+          loadDraft,
+          persistDraftFile,
+          removeDraftFile,
           settingsStore,
           toggleSidebar: () => { layout.toggleSidebar() },
           renameSession: async (sessionId, title) => {
@@ -4992,6 +5662,14 @@ export function apply(ctx) {
   ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
     name: 'conversation.session.header.actions', id: 'workspace-mobile-controls', order: -300,
   }, MobileHeaderControls))
+  // The session-switcher dropdown replaces the harness title crumb (CSS hides
+  // the current crumb; the trigger renders here at -400, leftmost). Switching
+  // reuses ctx.sessions.open — the same call the sidebar session list uses —
+  // so the whole layout (workspace, preview, chat) follows the new current.
+  ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
+    name: 'conversation.session.header.actions', id: 'workspace-session-switcher', order: -400,
+    inject: () => ({ openSession: sessionId => { ctx.sessions.open(sessionId) } }),
+  }, SessionSwitcherDropdown))
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({
     name: 'shell.overlay', id: 'workspace-mobile-hero', order: -100,
   }, MobileHeroControls))

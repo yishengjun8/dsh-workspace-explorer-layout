@@ -34,7 +34,7 @@ This bundle replaces the DeepSeek Harness Web root layout with four panes: **ses
 
 - CodeMirror 6 shows line numbers and syntax highlighting based on filenames or extensions; unknown types use plain text. A fold gutter and in-editor search (`Ctrl/Cmd+F`, `F3`) are built in.
 - `Ctrl+K+J` unfolds every collapsed fold region; `Ctrl+K+1..9` folds code by nesting level (e.g. `Ctrl+K+2` folds every second-level fold region).
-- The panel header offers **Word wrap** and **Reload from disk** (refresh) toggles; refresh refuses to run while there are unsaved drafts and explains why.
+- Editable files **open directly in edit mode** (no **Edit** button); the panel header offers **Cancel**, **Save**, **Word wrap**, and **Reload from disk** (refresh). Read-only files (dropped external files, oversized, truncated, mixed line endings, symlink paths, or editing disabled) show a read-only reason banner.
 - Each file-type group can pick an editor highlight preset (Default, Classic, Warm, Cool, Monochrome, XML (VS Code)) from the Explorer settings page, remembered per type in `localStorage`.
 
 ### Encodings
@@ -47,13 +47,19 @@ This bundle replaces the DeepSeek Harness Web root layout with four panes: **ses
 
 - Opened files enter per-Session preview tabs: `X` to close, drag to reorder, and tabs survive reloads.
 - **Pinned tabs**: right-click a tab to **Pin / Unpin**; pinned tabs show a pin icon and sort first, and **Close Other Tabs** only closes unpinned tabs.
-- Draft caches stay in page memory, out of `localStorage`; switching files never silently discards unsaved content.
+- Unsaved edits show a `·` after the tab label and after the filename in the preview panel title; it disappears once saved.
+- Unsaved drafts are kept in staging files (see Editing & Saving); localStorage only holds the dirty marker, never content; switching files never silently discards unsaved content.
 - The tab bar scrolls horizontally with the wheel, and newly activated tabs auto-scroll into view.
 
 ### Editing & Saving
 
-- Enters editing only on an explicit action with **Save**, **Cancel**, and `Ctrl/Cmd+S`; it never autosaves.
-- Saves against the revision observed at read time; a disk change preserves the draft and reports a conflict instead of overwriting.
+- Editable files **open directly in edit mode** with **Save**, **Cancel**, and `Ctrl/Cmd+S`.
+- **Staging draft file**: editing takes one **snapshot** (the source content); all temporary edits are debounce-written to a **draft file** (`~/.dsh-plugin/dsh-workspace-explorer-layout/drafts/<workspaceId>/`, long-lived), and the **source file is never touched**; a page refresh restores from the draft file (draft + snapshot + encoding). Auto-save is not a "save", so the `·` stays until an explicit save. localStorage only keeps the dirty marker, not the edit content or snapshot.
+- **Save (merge back to source)**: saving re-reads the source and compares it with the snapshot —
+  - Source unchanged by other tools (= snapshot): silently write the staged content back to the source, then delete the draft file.
+  - Source changed in different places than your edits: automatic three-way merge keeps both sides and writes back.
+  - Source changed in the same place as your edits: a dialog shows the conflicting region and lets you choose **Keep my version / Keep disk version / Cancel**.
+- **Cancel**: discards the temporary edits, deletes the draft file, and restores the editor to the source content (the source file itself is not changed).
 - Rejects binary, non-UTF-8, and out-of-Workspace symlink files; truncated large files, mixed-line-ending files, and symlink-traversing paths are read-only.
 
 ### File Operations

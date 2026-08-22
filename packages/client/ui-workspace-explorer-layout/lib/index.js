@@ -1,9 +1,9 @@
 import { Buffer } from 'node:buffer'
 import { execFile, spawn } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { copyFile, lstat, mkdir, open, readdir, realpath, rename, rm, stat, unlink } from 'node:fs/promises'
-import { release as osRelease } from 'node:os'
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { copyFile, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
+import { homedir, release as osRelease } from 'node:os'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import z from '@deepseek-ai/schemastery'
 import iconv from 'iconv-lite'
@@ -811,7 +811,7 @@ async function saveFile(workspace, relativePath, config, queues, req, encodingId
   })
 }
 
-async function readJsonObject(req, config) {
+async function readJsonObject(req, config, maximum = config.maxMutationBodyBytes) {
   const contentType = header(req.headers, 'content-type')?.toLowerCase().replace(/\s/g, '')
   if (contentType !== 'application/json' && contentType !== 'application/json;charset=utf-8') {
     throw new HttpError(415, 'invalid-content-type', '请求必须使用 application/json 内容')
@@ -823,15 +823,15 @@ async function readJsonObject(req, config) {
       throw new HttpError(400, 'invalid-content-length', 'Content-Length 必须是有效的非负整数')
     }
     declared = Number(declaredLength)
-    if (!Number.isSafeInteger(declared) || declared > config.maxMutationBodyBytes) {
-      throw new HttpError(413, 'request-too-large', `请求正文不能超过 ${config.maxMutationBodyBytes} 字节`)
+    if (!Number.isSafeInteger(declared) || declared > maximum) {
+      throw new HttpError(413, 'request-too-large', `请求正文不能超过 ${maximum} 字节`)
     }
   }
   const bytes = await readBody(
     req,
-    config.maxMutationBodyBytes,
+    maximum,
     'request-too-large',
-    `请求正文不能超过 ${config.maxMutationBodyBytes} 字节`,
+    `请求正文不能超过 ${maximum} 字节`,
   )
   if (declared !== undefined && bytes.byteLength !== declared) {
     throw new HttpError(400, 'content-length-mismatch', '请求正文长度与 Content-Length 不一致')
@@ -1078,6 +1078,117 @@ async function fsOperation(workspace, config, queues, req) {
     ? normalizeRelativePath(payload.target)
     : (() => { throw new HttpError(400, 'invalid-path', '目标路径无效') })()
   return copyEntry(workspace, source, target, config, queues, action === 'move')
+}
+
+/* ---- Draft (staging) file persistence ----
+ *
+ * While a workspace file is being edited, the temporary edits live in a draft
+ * file OUTSIDE the workspace, under the plugin's own long-lived directory
+ * (~/.dsh-plugin/dsh-workspace-explorer-layout/drafts/<workspaceId>/). The
+ * source file is never touched until the user explicitly saves; refreshing the
+ * page re-reads the draft. The draft JSON carries the current edit plus the
+ * snapshot (base text + base revision) taken when editing began, so restore
+ * and the save-time three-way merge need no other storage.
+ */
+
+const DRAFT_DIR_NAME = 'dsh-workspace-explorer-layout'
+const DRAFT_SUB_DIR = 'drafts'
+
+function draftRoot() {
+  return join(homedir(), '.dsh-plugin', DRAFT_DIR_NAME, DRAFT_SUB_DIR)
+}
+
+/** Stable file name for one workspace-relative path (path-hash based, so no
+ *  traversal or illegal characters can leak into the filesystem). */
+function draftFileName(relativePath) {
+  return `${createHash('sha256').update(relativePath).digest('hex')}.json`
+}
+
+function draftFilePath(workspaceId, relativePath) {
+  return join(draftRoot(), String(workspaceId), draftFileName(relativePath))
+}
+
+async function readDraftFile(workspaceId, relativePath) {
+  const target = draftFilePath(workspaceId, relativePath)
+  let raw
+  try {
+    raw = await readFile(target, 'utf8')
+  } catch (error) {
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return null
+    throw error
+  }
+  let value
+  try {
+    value = JSON.parse(raw)
+  } catch {
+    // A corrupt draft is treated as absent so the editor never surfaces a
+    // half-written file; the next auto-save recreates it.
+    return null
+  }
+  if (!isPlainObject(value) || value.path !== relativePath) return null
+  return value
+}
+
+function validateDraftPayload(payload, config) {
+  if (!isPlainObject(payload)) throw new HttpError(400, 'invalid-draft', '暂存请求必须是 JSON 对象')
+  const relativePath = normalizeRelativePath(payload.path ?? '')
+  if (relativePath === '') throw new HttpError(400, 'invalid-path', '暂存必须指定文件路径')
+  const text = (value, name) => {
+    if (typeof value !== 'string' || value.includes('\0')) throw new HttpError(400, 'invalid-draft', `${name} 无效`)
+    if (Buffer.byteLength(value, 'utf8') > config.maxEditableBytes) {
+      throw new HttpError(413, 'draft-too-large', `${name} 超过可编辑大小限制`)
+    }
+    return value
+  }
+  const draft = text(payload.draft, 'draft')
+  const baseText = text(payload.baseText, 'baseText')
+  const baseRevision = payload.baseRevision === undefined || payload.baseRevision === null
+    ? null
+    : typeof payload.baseRevision === 'string' && /^[a-f0-9]{64}$/.test(payload.baseRevision)
+      ? payload.baseRevision
+      : (() => { throw new HttpError(400, 'invalid-draft', 'baseRevision 无效') })()
+  const encoding = payload.encoding === undefined || payload.encoding === null
+    ? 'utf-8'
+    : encodingById(String(payload.encoding)).id
+  return {
+    path: relativePath,
+    encoding,
+    lineEnding: typeof payload.lineEnding === 'string' ? payload.lineEnding : 'none',
+    bom: Boolean(payload.bom),
+    baseText,
+    baseRevision,
+    draft,
+  }
+}
+
+/** Persist one file's draft JSON (atomic temp+rename, serialized per path). */
+async function saveDraftFile(workspaceId, payload, config, queues) {
+  if (!config.enableEditing) throw new HttpError(403, 'editing-disabled', '当前未启用文件编辑')
+  const target = draftFilePath(workspaceId, payload.path)
+  const body = `${JSON.stringify(payload)}\n`
+  return serializeWrite(queues, `draft:${workspaceId}:${payload.path}`, async () => {
+    await mkdir(dirname(target), { recursive: true })
+    const temp = join(dirname(target), `.${randomBytes(16).toString('hex')}.tmp`)
+    try {
+      await writeFile(temp, body, 'utf8')
+      await rename(temp, target)
+    } catch (error) {
+      await unlink(temp).catch(() => {})
+      throw error
+    }
+    return { workspaceId: String(workspaceId), path: payload.path, saved: true }
+  })
+}
+
+async function deleteDraftFile(workspaceId, relativePath, config, queues) {
+  if (!config.enableEditing) throw new HttpError(403, 'editing-disabled', '当前未启用文件编辑')
+  const target = draftFilePath(workspaceId, relativePath)
+  return serializeWrite(queues, `draft:${workspaceId}:${relativePath}`, async () => {
+    await unlink(target).catch((error) => {
+      if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') throw error
+    })
+    return { workspaceId: String(workspaceId), path: relativePath, deleted: true }
+  })
 }
 
 function requiredText(value, name, maximum) {
@@ -1358,6 +1469,7 @@ async function handleRequest(ctx, config, trustedHosts, writeQueues, req, res) {
     const treeEndpoint = url.pathname === `${API_PREFIX}/tree`
     const searchEndpoint = url.pathname === `${API_PREFIX}/search`
     const revealEndpoint = url.pathname === `${API_PREFIX}/reveal`
+    const draftEndpoint = url.pathname === `${API_PREFIX}/draft`
     const allowed = contextEndpoint
       ? 'POST'
       : encodingsEndpoint
@@ -1376,12 +1488,14 @@ async function handleRequest(ctx, config, trustedHosts, writeQueues, req, res) {
                     ? 'GET, HEAD'
                     : revealEndpoint
                       ? 'POST'
-                      : undefined
+                      : draftEndpoint
+                        ? 'GET, HEAD, PUT, DELETE'
+                        : undefined
     if (allowed !== undefined && !allowed.split(', ').includes(req.method ?? '')) {
       sendError(req, res, 405, 'method-not-allowed', `该接口只允许 ${allowed} 请求`, { allow: allowed })
       return
     }
-    if (!contextEndpoint && !encodingsEndpoint && !entryEndpoint && !externalFileEndpoint && !fileEndpoint && !fsEndpoint && !treeEndpoint && !searchEndpoint && !revealEndpoint) {
+    if (!contextEndpoint && !encodingsEndpoint && !entryEndpoint && !externalFileEndpoint && !fileEndpoint && !fsEndpoint && !treeEndpoint && !searchEndpoint && !revealEndpoint && !draftEndpoint) {
       sendError(req, res, 404, 'endpoint-not-found', '接口不存在')
       return
     }
@@ -1414,6 +1528,22 @@ async function handleRequest(ctx, config, trustedHosts, writeQueues, req, res) {
     }
     const relativePath = normalizeRelativePath(url.searchParams.get('path') ?? '')
     const encodingId = url.searchParams.get('encoding') ?? 'utf-8'
+    if (draftEndpoint) {
+      if (req.method === 'GET' || req.method === 'HEAD') {
+        if (relativePath === '') throw new HttpError(400, 'invalid-path', '暂存读取必须指定文件路径')
+        const value = await readDraftFile(workspaceId, relativePath)
+        sendJson(req, res, 200, value ?? { exists: false })
+        return
+      }
+      if (req.method === 'DELETE') {
+        if (relativePath === '') throw new HttpError(400, 'invalid-path', '暂存删除必须指定文件路径')
+        sendJson(req, res, 200, await deleteDraftFile(workspaceId, relativePath, config, writeQueues))
+        return
+      }
+      const payload = validateDraftPayload(await readJsonObject(req, config, config.maxEditableBytes * 2 + 64 * 1024), config)
+      sendJson(req, res, 200, await saveDraftFile(workspaceId, payload, config, writeQueues))
+      return
+    }
     if (fsEndpoint) {
       sendJson(req, res, 200, await fsOperation(workspace, config, writeQueues, req))
       return
