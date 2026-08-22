@@ -58,7 +58,7 @@ This bundle replaces the DeepSeek Harness Web root layout with four panes: **ses
 - **Save (merge back to source)**: saving re-reads the source and compares it with the snapshot —
   - Source unchanged by other tools (= snapshot): silently write the staged content back to the source, then delete the draft file.
   - Source changed in different places than your edits: automatic three-way merge keeps both sides and writes back.
-  - Source changed in the same place as your edits: a dialog shows the conflicting region and lets you choose **Keep my version / Keep disk version / Cancel**.
+  - Source changed in the same place as your edits: the dialog walks each conflicting region — the top two columns show an inline add/delete diff (My changes / Disk version), the bottom two columns show the resulting code without markers, letting you pick **Keep my version / Keep disk version** per region, or **Cancel** to abort the save.
 - **Cancel**: discards the temporary edits, deletes the draft file, and restores the editor to the source content (the source file itself is not changed).
 - Rejects binary, non-UTF-8, and out-of-Workspace symlink files; truncated large files, mixed-line-ending files, and symlink-traversing paths are read-only.
 
@@ -91,7 +91,7 @@ This bundle replaces the DeepSeek Harness Web root layout with four panes: **ses
 ### Appearance & Settings
 
 - Uses Harness semantic theme variables and supports light, dark, and system themes.
-- Explorer settings page: tree row height, search result display, file icon badge colors, per-type highlight presets, chat font size, and Think auto-expand / collapse delay.
+- Explorer settings page: tree row height, search result display, file icon badge colors, per-type highlight presets, save-conflict dialog font size, chat font size, and Think auto-expand / collapse delay.
 - A **Mobile mode** toggle in the sidebar footer (same approach as dsh-mobile-preview) collapses the layout into a centered phone column; the sidebar becomes a floating drawer opened by the whale at the top-left (session list and file tree stay inside it), and a **Browse files** button appears right of the whale in the conversation header to fill the phone column with file browsing while the header stays reachable. Mobile mode is transient, so a reload returns to the desktop layout.
 
 ## 🎨 Syntax Highlighting

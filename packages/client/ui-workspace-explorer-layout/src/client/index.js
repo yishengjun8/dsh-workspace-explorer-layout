@@ -43,6 +43,9 @@ const PREVIEW_DEFAULT = 420, PREVIEW_MIN = 280, PREVIEW_MAX = 760, RESIZE_STEP =
 const CONTEXT_MENU_WIDTH = 176, CONTEXT_MENU_HEIGHT = 280
 const ROW_HEIGHT_DEFAULT = 20, ROW_HEIGHT_MIN = 12, ROW_HEIGHT_MAX = 36
 const CHAT_FONT_SIZE_DEFAULT = 16, CHAT_FONT_SIZE_MIN = 13, CHAT_FONT_SIZE_MAX = 20
+/* Font size of the comparison text inside the save-conflict dialog (px). The
+ * default matches the pre-existing .dsh-wel-conflict-code font-size. */
+const CONFLICT_FONT_SIZE_DEFAULT = 12, CONFLICT_FONT_SIZE_MIN = 6, CONFLICT_FONT_SIZE_MAX = 24
 /* Whether search results show each file's matched rows expanded by default;
  * the explorer settings page lets the user choose (default: expanded). */
 const SEARCH_MATCH_EXPAND_DEFAULT = true
@@ -268,6 +271,9 @@ const zh = {
   'dialog.saveConflictMine': '我的修改',
   'dialog.saveConflictTheirs': '磁盘版本',
   'dialog.saveConflictRegion': '冲突位置：第 {lines} 行',
+  'dialog.saveConflictPrev': '上一处',
+  'dialog.saveConflictMineFinal': '我的修改 · 实际代码',
+  'dialog.saveConflictTheirsFinal': '磁盘版本 · 实际代码',
   'editor.unsavedTabClose': '此标签有未保存内容，请先保存或取消编辑。',
   'editor.unsavedTabsClose': '存在有未保存内容的标签，请先保存或取消编辑。',
   'editor.unsavedBlocked': '当前文件有未保存的更改，请先保存或取消编辑。',
@@ -333,10 +339,12 @@ const zh = {
   'settings.resetAllPresets': '恢复全部默认预设',
   'settings.chatFont': '对话文字大小',
   'settings.chatFont.reset.title': '恢复默认字号',
+  'settings.conflictFontSize': '冲突弹窗对比字号',
+  'settings.conflictFontSize.reset.title': '恢复默认字号',
   'settings.autoExpandThink': '思考过程自动展开',
   'settings.thinkDelay': '思考收起延迟',
   'settings.resetDefault': '恢复默认',
-  'settings.hint': '文件浏览设置：调整左侧文件树的行高、搜索结果显示方式与图标徽标配色；内容浏览设置：为每种文件类型选择编辑器代码高亮预设；对话框设置：调整对话文字大小，开启思考过程自动展开后，聊天中正在输出的思考内容会自动展开、结束后按设定延迟自动收起（0–10 秒，分度 0.1 秒），期间手动操作可取消；未修改的项使用默认值。',
+  'settings.hint': '文件浏览设置：调整左侧文件树的行高、搜索结果显示方式与图标徽标配色；内容浏览设置：为每种文件类型选择编辑器代码高亮预设，并调整保存冲突弹窗中对比文本的字号；对话框设置：调整对话文字大小，开启思考过程自动展开后，聊天中正在输出的思考内容会自动展开、结束后按设定延迟自动收起（0–10 秒，分度 0.1 秒），期间手动操作可取消；未修改的项使用默认值。',
   'fileColor.directory': '目录',
   'fileColor.style': '样式',
   'fileColor.log': '日志',
@@ -584,6 +592,9 @@ const en = {
   'dialog.saveConflictMine': 'My changes',
   'dialog.saveConflictTheirs': 'Disk version',
   'dialog.saveConflictRegion': 'Conflict at line(s) {lines}',
+  'dialog.saveConflictPrev': 'Previous',
+  'dialog.saveConflictMineFinal': 'My changes · final code',
+  'dialog.saveConflictTheirsFinal': 'Disk version · final code',
   'editor.unsavedTabClose': 'This tab has unsaved content; save or cancel editing first.',
   'editor.unsavedTabsClose': 'Some tabs have unsaved content; save or cancel editing first.',
   'editor.unsavedBlocked': 'The current file has unsaved changes; save or cancel editing first.',
@@ -649,10 +660,12 @@ const en = {
   'settings.resetAllPresets': 'Reset all presets',
   'settings.chatFont': 'Chat font size',
   'settings.chatFont.reset.title': 'Reset font size',
+  'settings.conflictFontSize': 'Conflict dialog font size',
+  'settings.conflictFontSize.reset.title': 'Reset font size',
   'settings.autoExpandThink': 'Auto-expand thinking',
   'settings.thinkDelay': 'Think collapse delay',
   'settings.resetDefault': 'Reset',
-  'settings.hint': 'File Browsing: adjust the tree row height, how search results are shown, and the file icon badge colors. Content Browsing: pick a highlight preset per file type. Dialog Settings: adjust the chat font size; when auto-expand thinking is on, streaming thinking blocks expand automatically and collapse after the configured delay (0–10 s, 0.1 s steps), and manual interaction cancels a pending collapse. Unchanged items use their defaults.',
+  'settings.hint': 'File Browsing: adjust the tree row height, how search results are shown, and the file icon badge colors. Content Browsing: pick a highlight preset per file type, and adjust the save-conflict dialog comparison text size. Dialog Settings: adjust the chat font size; when auto-expand thinking is on, streaming thinking blocks expand automatically and collapse after the configured delay (0–10 s, 0.1 s steps), and manual interaction cancels a pending collapse. Unchanged items use their defaults.',
   'fileColor.directory': 'Directory',
   'fileColor.style': 'Style',
   'fileColor.log': 'Log',
@@ -887,7 +900,7 @@ const styles = `
 .dsh-wel-chevron{display:inline-flex;align-items:center;justify-content:center;flex:0 0 12px;color:var(--dsw-alias-label-caption);font-size:10px}.dsh-wel-file-mark{display:inline-flex;align-items:center;justify-content:center;flex:0 0 16px;width:16px;height:16px;border-radius:4px;background:color-mix(in srgb,var(--dsh-wel-file-accent,var(--dsw-alias-label-tertiary)) 16%,transparent);color:var(--dsh-wel-file-accent,var(--dsw-alias-label-tertiary));font-size:8px;font-weight:600;text-transform:uppercase}.dsh-wel-file-mark[data-group='directory']{--dsh-wel-file-accent:var(--dsh-wel-file-directory,#3b82f6)}.dsh-wel-file-mark[data-group='typescript']{--dsh-wel-file-accent:var(--dsh-wel-file-typescript,#3178c6)}.dsh-wel-file-mark[data-group='javascript']{--dsh-wel-file-accent:var(--dsh-wel-file-javascript,#e5c158)}.dsh-wel-file-mark[data-group='json']{--dsh-wel-file-accent:var(--dsh-wel-file-json,#e07a3c)}.dsh-wel-file-mark[data-group='markup']{--dsh-wel-file-accent:var(--dsh-wel-file-markup,#e04a3c)}.dsh-wel-file-mark[data-group='style']{--dsh-wel-file-accent:var(--dsh-wel-file-style,#a855f7)}.dsh-wel-file-mark[data-group='markdown']{--dsh-wel-file-accent:var(--dsh-wel-file-markdown,#12a5a0)}.dsh-wel-file-mark[data-group='log']{--dsh-wel-file-accent:var(--dsh-wel-file-log,#d99a2b)}.dsh-wel-file-mark[data-group='python']{--dsh-wel-file-accent:var(--dsh-wel-file-python,#4b8bb8)}.dsh-wel-file-mark[data-group='shell']{--dsh-wel-file-accent:var(--dsh-wel-file-shell,#22a06b)}.dsh-wel-file-mark[data-group='config']{--dsh-wel-file-accent:var(--dsh-wel-file-config,#8a95a5)}.dsh-wel-file-mark[data-group='c-family']{--dsh-wel-file-accent:var(--dsh-wel-file-c-family,#5a7ba6)}.dsh-wel-file-mark[data-group='csharp']{--dsh-wel-file-accent:var(--dsh-wel-file-csharp,#a25fd0)}.dsh-wel-file-mark[data-group='other']{--dsh-wel-file-accent:var(--dsh-wel-file-other,#9aa3ad)}.dsh-wel-file-mark[data-group='blocked']{--dsh-wel-file-accent:var(--dsh-wel-file-blocked,#e5484d)}.dsh-wel-row-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-symlink{margin-left:auto;color:var(--dsw-alias-label-caption);font-size:10px}.dsh-wel-tree-status{padding:8px 10px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}.dsh-wel-tree-status[data-error]{color:var(--dsw-alias-state-error-primary)}.dsh-wel-empty{display:flex;flex:1;min-height:0;align-items:center;justify-content:center;padding:24px;color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:20px;text-align:center}
 .dsh-wel-preview-header-meta{display:flex;align-items:center;gap:6px;min-width:0}.dsh-wel-preview-header-meta>span:not(.dsh-wel-language):not(.dsh-wel-encoding){overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:15px;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-language{flex:0 0 auto;padding:1px 5px;border-radius:4px;background:var(--dsw-alias-markdown-tag);color:var(--dsw-alias-label-secondary);font-size:9px;font-weight:600;line-height:14px;text-transform:uppercase}.dsh-wel-encoding{flex:0 0 auto;padding:1px 5px;border-radius:4px;background:var(--dsw-alias-markdown-tag);color:var(--dsw-alias-label-secondary);font-size:9px;font-weight:600;line-height:14px;text-transform:uppercase}.dsh-wel-dirty{color:var(--dsw-alias-state-warn-label);font-size:12px}.dsh-wel-preview-tabs{display:flex;align-items:stretch;gap:4px;min-width:0;padding:6px 8px;border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-specific-sidebar-fill);overflow-x:auto;overflow-y:hidden;scrollbar-width:thin}.dsh-wel-preview-tab{flex:none;display:flex;align-items:center;gap:5px;min-width:0;max-width:220px;height:28px;padding:0 5px 0 9px;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:18px;cursor:grab;box-sizing:border-box;white-space:nowrap}.dsh-wel-preview-tab:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsh-wel-preview-tab[data-active]{background:var(--dsw-alias-interactive-bg-active);color:var(--dsw-alias-label-primary)}.dsh-wel-preview-tab[data-dragging]{opacity:.7}.dsh-wel-preview-drop-indicator{flex:none;width:3px;height:20px;border-radius:2px;background:var(--dsw-alias-state-business-primary);align-self:center;pointer-events:none}.dsh-wel-preview-tab-button{display:flex;flex:1;align-items:center;gap:5px;min-width:0;height:100%;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}.dsh-wel-preview-tab-name{min-width:0;overflow:hidden;text-overflow:ellipsis}.dsh-wel-preview-tab-close{flex:none;display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border:0;border-radius:4px;background:transparent;color:inherit;font-size:14px;line-height:1;cursor:pointer}.dsh-wel-preview-tab-close:hover{background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary)}.dsh-wel-preview-tab-close:disabled{cursor:not-allowed;opacity:.45}.dsh-wel-preview-body{position:relative;flex:1;min-height:0;overflow:hidden;background:var(--dsw-alias-markdown-code-block)}.dsh-wel-editor-host{height:100%;min-width:0}.dsh-wel-editor-host .cm-editor{height:100%;background:var(--dsw-alias-markdown-code-block);color:var(--dsw-alias-label-primary)}.dsh-wel-editor-host .cm-scroller{font-family:var(--dsw-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:12px;line-height:19px;overflow:auto}.dsh-wel-editor-host .cm-gutters{background:var(--dsw-alias-markdown-code-block-banner);color:var(--dsw-alias-label-caption);border-right:1px solid var(--dsw-alias-border-l2)}.dsh-wel-editor-host .cm-activeLine,.dsh-wel-editor-host .cm-activeLineGutter{background:var(--dsw-alias-interactive-bg-hover)}.dsh-wel-editor-host .cm-selectionBackground,.dsh-wel-editor-host .cm-content ::selection{background:var(--dsw-alias-interactive-bg-active)!important}.dsh-wel-editor-host .cm-cursor{border-left-color:var(--dsw-alias-label-primary)}.dsh-wel-editor-host .cm-foldPlaceholder{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary)}.dsh-wel-editor-host .cm-panels{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}.dsh-wel-editor-host .cm-panel input{background:var(--dsw-alias-bg-base);border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary)}
 .dsh-wel-context-row{box-sizing:border-box;display:flex;align-items:center;gap:8px;flex:none;width:min(var(--dsh-composer-card-max-width),max(0px,calc(100% - (var(--dsh-composer-side-clearance) * 2))));margin:0 auto;padding:0}.dsh-wel-context-prefix{display:flex;flex:1;align-items:center;gap:6px;min-width:0;min-height:28px;padding:5px 8px 5px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:22px;background:var(--dsw-specific-input-major);color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;line-height:16px;text-align:left;cursor:pointer}.dsh-wel-context-prefix:hover{color:var(--dsw-alias-label-primary)}.dsh-wel-context-prefix:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}.dsh-wel-context-prefix[data-inactive]{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-caption);filter:grayscale(1)}.dsh-wel-context-prefix-mark{flex:none;font-size:12px}.dsh-wel-context-prefix-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-message-context-summary{box-sizing:border-box;display:flex;align-items:center;align-self:flex-end;gap:6px;max-width:100%;min-height:24px;padding:3px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:22px;background:var(--dsw-specific-input-major);color:var(--dsw-alias-label-secondary);font-size:11px;line-height:16px}.dsh-wel-message-context-summary-mark{flex:none;font-size:12px}.dsh-wel-message-context-summary-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-message-context-summary-range{flex:none;color:var(--dsw-alias-label-caption)}.dsh-wel-message-context-bubble[data-dsh-wel-empty-prompt]{display:none}
-.dsh-wel-banner{padding:7px 12px;border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-state-warn-tertiary);color:var(--dsw-alias-state-warn-label);font-size:11px;line-height:16px}.dsh-wel-banner-actions{display:flex;gap:6px;margin-top:5px}.dsh-wel-status{padding:5px 12px;border-bottom:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-tertiary);font-size:11px}.dsh-wel-status[data-error]{color:var(--dsw-alias-state-error-primary)}.dsh-wel-error-card{max-width:300px;padding:14px 16px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:19px;text-align:left}.dsh-wel-dialog-backdrop{position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;padding:20px;background:var(--dsw-alias-bg-mask-1,rgba(0,0,0,.38));box-sizing:border-box}.dsh-wel-dialog{width:min(360px,100%);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-elevated,0 12px 36px rgba(0,0,0,.24));box-sizing:border-box}.dsh-wel-dialog-header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 14px;border-bottom:1px solid var(--dsw-alias-border-l2)}.dsh-wel-dialog-title{min-width:0;overflow:hidden;color:var(--dsw-alias-label-primary);font-size:13px;font-weight:600;line-height:18px;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-dialog-body{display:flex;flex-direction:column;gap:8px;padding:14px}.dsh-wel-dialog-input{width:100%;height:32px;padding:0 9px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;box-sizing:border-box}.dsh-wel-dialog-input:focus{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-1px}.dsh-wel-dialog-error{color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:18px}.dsh-wel-dialog-message{color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px}.dsh-wel-dialog-warning{color:var(--dsw-alias-state-warn-label);font-size:12px;line-height:18px}.dsh-wel-danger-button{color:var(--dsw-alias-state-error-primary)}.dsh-wel-dialog-footer{display:flex;justify-content:flex-end;gap:8px;padding:0 14px 14px}.dsh-wel-conflict-region{display:flex;flex-direction:column;gap:6px}.dsh-wel-conflict-region-title{color:var(--dsw-alias-state-warn-label);font-size:11px;line-height:16px}.dsh-wel-conflict-cols{display:grid;grid-template-columns:1fr 1fr;gap:6px;min-width:0}.dsh-wel-conflict-col{min-width:0;overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:6px}.dsh-wel-conflict-col-label{padding:3px 6px;border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:14px}.dsh-wel-conflict-mine .dsh-wel-conflict-col-label{color:var(--dsw-alias-state-warn-label)}.dsh-wel-conflict-theirs .dsh-wel-conflict-col-label{color:var(--dsw-alias-state-business-primary)}.dsh-wel-conflict-code{margin:0;max-height:160px;overflow:auto;padding:6px;color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-mono,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);font-size:11px;line-height:16px;white-space:pre;box-sizing:border-box}
+.dsh-wel-banner{padding:7px 12px;border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-state-warn-tertiary);color:var(--dsw-alias-state-warn-label);font-size:11px;line-height:16px}.dsh-wel-banner-actions{display:flex;gap:6px;margin-top:5px}.dsh-wel-status{padding:5px 12px;border-bottom:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-tertiary);font-size:11px}.dsh-wel-status[data-error]{color:var(--dsw-alias-state-error-primary)}.dsh-wel-error-card{max-width:300px;padding:14px 16px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:19px;text-align:left}.dsh-wel-dialog-backdrop{position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;padding:20px;background:var(--dsw-alias-bg-mask-1,rgba(0,0,0,.38));box-sizing:border-box}.dsh-wel-dialog{width:min(360px,100%);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-elevated,0 12px 36px rgba(0,0,0,.24));box-sizing:border-box}.dsh-wel-dialog-header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 14px;border-bottom:1px solid var(--dsw-alias-border-l2)}.dsh-wel-dialog-title{min-width:0;overflow:hidden;color:var(--dsw-alias-label-primary);font-size:13px;font-weight:600;line-height:18px;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-dialog-body{display:flex;flex-direction:column;gap:8px;padding:14px}.dsh-wel-dialog-input{width:100%;height:32px;padding:0 9px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;box-sizing:border-box}.dsh-wel-dialog-input:focus{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-1px}.dsh-wel-dialog-error{color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:18px}.dsh-wel-dialog-message{color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px}.dsh-wel-dialog-warning{color:var(--dsw-alias-state-warn-label);font-size:12px;line-height:18px}.dsh-wel-danger-button{color:var(--dsw-alias-state-error-primary)}.dsh-wel-dialog-footer{display:flex;justify-content:flex-end;gap:8px;padding:0 14px 14px}.dsh-wel-conflict-region{display:flex;flex-direction:column;gap:8px;min-height:0}.dsh-wel-conflict-region-title{display:flex;align-items:center;gap:8px;color:var(--dsw-alias-state-warn-label);font-size:12px;line-height:18px}.dsh-wel-conflict-cols{display:grid;grid-template-columns:1fr 1fr;gap:8px;min-height:0;flex:1}.dsh-wel-conflict-cols-final{border-top:1px solid var(--dsw-alias-border-l2);padding-top:8px}.dsh-wel-conflict-col{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:6px}.dsh-wel-conflict-col-label{padding:4px 8px;border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dsh-wel-conflict-mine .dsh-wel-conflict-col-label{color:var(--dsw-alias-state-warn-label)}.dsh-wel-conflict-theirs .dsh-wel-conflict-col-label{color:var(--dsw-alias-state-business-primary)}.dsh-wel-conflict-code{margin:0;min-height:0;flex:1;overflow:auto;padding:10px;color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-mono,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);font-size:var(--dsh-wel-conflict-font-size,12px);line-height:20px;white-space:pre;box-sizing:border-box}.dsh-wel-inline-add{color:var(--dsw-alias-state-success-primary);background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 14%,transparent);border-radius:3px;box-decoration-break:clone;-webkit-box-decoration-break:clone}.dsh-wel-inline-del{color:var(--dsw-alias-state-error-primary);text-decoration:line-through;text-decoration-thickness:1.5px;background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 12%,transparent);border-radius:3px;opacity:.9;box-decoration-break:clone;-webkit-box-decoration-break:clone}.dsh-wel-conflict-code-row{display:inline;border-radius:3px;box-decoration-break:clone;-webkit-box-decoration-break:clone}.dsh-wel-conflict-code-row[data-kind='add']{background:color-mix(in srgb,var(--dsw-alias-label-secondary) 16%,transparent)}.dsh-wel-conflict-mine .dsh-wel-conflict-code-row[data-kind='add']{background:color-mix(in srgb,var(--dsw-alias-state-warn-label) 20%,transparent);color:var(--dsw-alias-state-warn-label)}.dsh-wel-conflict-theirs .dsh-wel-conflict-code-row[data-kind='add']{background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 20%,transparent);color:var(--dsw-alias-state-business-primary)}.dsh-wel-conflict-code-row[data-kind='del']{color:var(--dsw-alias-state-error-primary);text-decoration:line-through;text-decoration-thickness:1.5px;background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 10%,transparent);opacity:.85}.dsh-wel-conflict-dialog{width:66vw;max-width:66vw;max-height:min(90vh,1000px);display:flex;flex-direction:column}.dsh-wel-conflict-dialog .dsh-wel-dialog-body{flex:1;min-height:0;overflow:auto}.dsh-wel-conflict-progress{margin-left:8px;padding:0 6px;border-radius:6px;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary);font-size:11px;font-weight:600;line-height:18px;white-space:nowrap}
 .dsh-wel-frame [data-slot='sidebar.footer.action']{display:flex!important;flex-direction:column;align-items:stretch;width:100%;min-width:0}
 .dsh-wel-splitter{position:absolute;top:0;bottom:0;z-index:8;width:8px;margin-left:-4px;border:0;background:transparent;cursor:col-resize;touch-action:none}.dsh-wel-splitter::after{content:'';position:absolute;top:0;bottom:0;left:3px;width:2px;background:transparent;transition:background var(--ds-transition-duration-fast) var(--ds-ease-in-out)}.dsh-wel-splitter:hover::after,.dsh-wel-splitter[data-dragging]::after,.dsh-wel-splitter:focus-visible::after{background:var(--dsw-alias-state-business-primary)}.dsh-wel-details{position:absolute;z-index:16;top:0;right:0;bottom:0;width:min(440px,45vw);overflow:hidden;border-left:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-elevated,0 12px 36px var(--dsw-alias-bg-mask-1));transform:translateX(0);opacity:1;transition:transform var(--ds-transition-duration-slow) var(--ds-ease-in-out),opacity var(--ds-transition-duration-fast) var(--ds-ease-in-out)}.dsh-wel-details[data-closed]{pointer-events:none;visibility:hidden;transform:translateX(100%);opacity:0}.dsh-wel-overlay{position:absolute;inset:0;z-index:20;pointer-events:none}.dsh-wel-overlay>*{pointer-events:auto}.dsh-wel-tree{position:relative}.dsh-wel-context-menu{position:fixed;z-index:40;min-width:168px;padding:6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-elevated,0 12px 36px rgba(0,0,0,.24));box-sizing:border-box}.dsh-wel-context-item{display:block;width:100%;height:30px;padding:0 10px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:30px;text-align:left;cursor:pointer;box-sizing:border-box}.dsh-wel-context-item:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsh-wel-context-item:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-2px}.dsh-wel-context-item:disabled{cursor:not-allowed;opacity:.5}.dsh-wel-context-item:disabled:hover{background:transparent;color:var(--dsw-alias-label-primary)}.dsh-wel-context-separator{height:1px;margin:4px 0;border:0;background:var(--dsw-alias-border-l2)}.dsh-wel-copy-notice{position:absolute;right:10px;bottom:10px;z-index:12;padding:5px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-size:11px;line-height:16px;box-shadow:var(--dsw-shadow-elevated,0 4px 12px rgba(0,0,0,.18))}@media(prefers-reduced-motion:reduce){.dsh-wel-frame,.dsh-wel-details,.dsh-wel-splitter::after{transition:none}}
 .dsh-wel-search-header{flex-direction:column;align-items:stretch;gap:8px;padding:8px}
@@ -1502,15 +1515,18 @@ function rangesOverlap(left, right) {
 
 /* Merge `mine` and `theirs` against the common `base`. Returns
    { status: 'clean', merged } when the two change sets do not overlap, or
-   { status: 'conflict', conflicts } with one entry per overlapping base span
-   ({ start, end, base, mine, theirs } line arrays, start/end 0-based half-open
-   over `base`). */
+   { status: 'conflict', conflicts, merged } with one entry per overlapping
+   base span ({ start, end, base, mine, theirs } line arrays, start/end
+   0-based half-open over `base`). On conflict `merged` is the fully merged
+   skeleton: every non-conflicting change is already applied, and each conflict
+   region is a single __DSH_CONFLICT_<i>__ marker line that the caller replaces
+   with the chosen side's lines when the user resolves that conflict. */
 function threeWayMerge(baseText, mineText, theirsText) {
   const base = baseText.split('\n')
   const mine = mineText.split('\n')
   const theirs = theirsText.split('\n')
   if (base.length > MERGE_MAX_LINES || mine.length > MERGE_MAX_LINES || theirs.length > MERGE_MAX_LINES) {
-    return { status: 'conflict', conflicts: [{ start: 0, end: base.length, base, mine, theirs }] }
+    return { status: 'conflict', conflicts: [{ start: 0, end: base.length, base, mine, theirs }], merged: '__DSH_CONFLICT_0__' }
   }
   if (mineText === theirsText) return { status: 'clean', merged: mineText }
   if (baseText === mineText) return { status: 'clean', merged: theirsText }
@@ -1522,13 +1538,21 @@ function threeWayMerge(baseText, mineText, theirsText) {
   let mi = 0
   let ti = 0
   let i = 0
-  const mkConflict = (start, end, m, t) => ({
-    start,
-    end,
-    base: base.slice(start, end),
-    mine: m.added,
-    theirs: t.added,
-  })
+  const mkConflict = (start, end, m, t) => {
+    // The conflict span [start, end) may include lines only one side changed.
+    // Each side shows its FULL segment for the span — unchanged base lines plus
+    // its own added lines — so a resolution restores the whole region, not just
+    // the added lines.
+    const mineLines = [...base.slice(start, m.from), ...m.added, ...base.slice(m.to, end)]
+    const theirsLines = [...base.slice(start, t.from), ...t.added, ...base.slice(t.to, end)]
+    return {
+      start,
+      end,
+      base: base.slice(start, end),
+      mine: mineLines,
+      theirs: theirsLines,
+    }
+  }
   while (i < base.length || mi < mineChanges.length || ti < theirsChanges.length) {
     const m = mi < mineChanges.length ? mineChanges[mi] : null
     const t = ti < theirsChanges.length ? theirsChanges[ti] : null
@@ -1543,7 +1567,9 @@ function threeWayMerge(baseText, mineText, theirsText) {
         ti += 1
       } else {
         const end = Math.max(m.to, t.to)
+        const conflictIndex = conflicts.length
         conflicts.push(mkConflict(i, end, m, t))
+        merged.push(`__DSH_CONFLICT_${conflictIndex}__`)
         i = end
         mi += 1
         ti += 1
@@ -1551,7 +1577,9 @@ function threeWayMerge(baseText, mineText, theirsText) {
     } else if (m !== null && m.from === i) {
       if (t !== null && rangesOverlap(m, t)) {
         const end = Math.max(m.to, t.to)
+        const conflictIndex = conflicts.length
         conflicts.push(mkConflict(Math.min(m.from, t.from), end, m, t))
+        merged.push(`__DSH_CONFLICT_${conflictIndex}__`)
         i = end
         mi += 1
         ti += 1
@@ -1563,7 +1591,12 @@ function threeWayMerge(baseText, mineText, theirsText) {
     } else if (t !== null && t.from === i) {
       if (m !== null && rangesOverlap(t, m)) {
         const end = Math.max(t.to, m.to)
-        conflicts.push(mkConflict(Math.min(t.from, m.from), end, t, m))
+        const conflictIndex = conflicts.length
+        // m is the mine-side change, t the theirs-side change: mkConflict keeps
+        // that order (mine, theirs) so the displayed and resolved sides match
+        // the actual authors.
+        conflicts.push(mkConflict(Math.min(t.from, m.from), end, m, t))
+        merged.push(`__DSH_CONFLICT_${conflictIndex}__`)
         i = end
         mi += 1
         ti += 1
@@ -1577,8 +1610,87 @@ function threeWayMerge(baseText, mineText, theirsText) {
       i += 1
     }
   }
-  if (conflicts.length > 0) return { status: 'conflict', conflicts }
+  if (conflicts.length > 0) return { status: 'conflict', conflicts, merged: merged.join('\n') }
   return { status: 'clean', merged: merged.join('\n') }
+}
+
+/* Character-level diff of one conflict side against the common base: coalesced
+   { text, kind } segments (kind 'same' | 'add' | 'del') over the whole side
+   text. Unchanged characters keep their original color, characters this side
+   added render green, and characters this side removed render as a red
+   strikethrough — all inline on the same line. Splitting on codepoints (not
+   UTF-16 code units) keeps surrogate pairs intact. Returns null when the input
+   is too large to diff safely (the caller falls back to line-level marks). */
+const INLINE_DIFF_MAX_CHARS = 20000
+function inlineDiffSegments(baseText, sideText) {
+  const baseChars = Array.from(baseText)
+  const sideChars = Array.from(sideText)
+  if (baseChars.length > INLINE_DIFF_MAX_CHARS || sideChars.length > INLINE_DIFF_MAX_CHARS) return null
+  const changes = myersDiff(baseChars, sideChars)
+  const segments = []
+  let i = 0
+  const push = (text, kind) => {
+    if (text.length === 0) return
+    const previous = segments[segments.length - 1]
+    if (previous !== undefined && previous.kind === kind) previous.text += text
+    else segments.push({ text, kind })
+  }
+  for (const change of changes) {
+    for (; i < change.from; i += 1) push(baseChars[i], 'same')
+    for (let k = change.from; k < change.to; k += 1) push(baseChars[k], 'del')
+    for (const char of change.added) push(char, 'add')
+    i = change.to
+  }
+  for (; i < baseChars.length; i += 1) push(baseChars[i], 'same')
+  return segments
+}
+
+/* React nodes for one conflict side against the common base. The primary path
+   is a character-level inline diff: unchanged text renders as plain (original
+   color), added characters as green, removed characters as a red strikethrough,
+   all on the same line. Newline characters inside any segment keep the <pre>'s
+   exact line layout. Oversized regions fall back to line-level marks. */
+function diffRows(baseLines, sideLines) {
+  const segments = inlineDiffSegments(baseLines.join('\n'), sideLines.join('\n'))
+  if (segments !== null) {
+    const nodes = []
+    for (const segment of segments) {
+      nodes.push(segment.kind === 'same'
+        ? segment.text
+        : h('span', { className: `dsh-wel-inline-${segment.kind}` }, segment.text))
+    }
+    return nodes
+  }
+  // Fallback: line-level diff rows (whole deleted lines struck, whole added
+  // lines highlighted) for content too large for the character diff.
+  const rows = diffSideLines(baseLines, sideLines)
+  const nodes = []
+  for (let i = 0; i < rows.length; i += 1) {
+    if (i > 0) nodes.push('\n')
+    nodes.push(h('span', { className: 'dsh-wel-conflict-code-row', 'data-kind': rows[i].kind }, rows[i].text))
+  }
+  return nodes
+}
+
+/* Line-level diff rows for one conflict side against the common base: returns
+   { text, kind }[] where kind is 'same' (unchanged), 'add' (line added/changed
+   by this side), or 'del' (base line removed by this side). Used only as the
+   oversized fallback for the inline character diff. */
+function diffSideLines(baseLines, sideLines) {
+  if (baseLines.length > MERGE_MAX_LINES || sideLines.length > MERGE_MAX_LINES) {
+    return sideLines.map(text => ({ text, kind: 'same' }))
+  }
+  const changes = myersDiff(baseLines, sideLines)
+  const rows = []
+  let i = 0
+  for (const change of changes) {
+    for (; i < change.from; i += 1) rows.push({ text: baseLines[i], kind: 'same' })
+    for (let k = change.from; k < change.to; k += 1) rows.push({ text: baseLines[k], kind: 'del' })
+    for (const line of change.added) rows.push({ text: line, kind: 'add' })
+    i = change.to
+  }
+  for (; i < baseLines.length; i += 1) rows.push({ text: baseLines[i], kind: 'same' })
+  return rows
 }
 
 // The preview pane only responds to "normal" (non-image) file drags; images
@@ -1705,6 +1817,7 @@ function createExplorerSettingsStore() {
     init: () => ({
       rowHeight: ROW_HEIGHT_DEFAULT,
       chatFontSize: CHAT_FONT_SIZE_DEFAULT,
+      conflictFontSize: CONFLICT_FONT_SIZE_DEFAULT,
       wrap: false,
       expandSearchMatches: SEARCH_MATCH_EXPAND_DEFAULT,
       autoExpandThink: AUTO_EXPAND_THINK_DEFAULT,
@@ -1716,6 +1829,7 @@ function createExplorerSettingsStore() {
     actions: {
       setRowHeight: (draft, value) => { draft.rowHeight = clamp(value, ROW_HEIGHT_MIN, ROW_HEIGHT_MAX) },
       setChatFontSize: (draft, value) => { draft.chatFontSize = clamp(value, CHAT_FONT_SIZE_MIN, CHAT_FONT_SIZE_MAX) },
+      setConflictFontSize: (draft, value) => { draft.conflictFontSize = clamp(value, CONFLICT_FONT_SIZE_MIN, CONFLICT_FONT_SIZE_MAX) },
       setWrap: (draft, value) => { draft.wrap = Boolean(value) },
       setExpandSearchMatches: (draft, value) => { draft.expandSearchMatches = Boolean(value) },
       setAutoExpandThink: (draft, value) => { draft.autoExpandThink = Boolean(value) },
@@ -2810,9 +2924,63 @@ function EncodingDialog({dialog,options,value,busy,onCancel,onPick,onConfirm}){i
 function SessionRenameDialog({draft,busy,error,onCancel,onConfirm,onDraft}){return h('div',{className:'dsh-wel-dialog-backdrop',onMouseDown:e=>{if(e.target===e.currentTarget&&!busy)onCancel()}},h('div',{'aria-modal':true,className:'dsh-wel-dialog',role:'dialog'},h('div',{className:'dsh-wel-dialog-header'},h('div',{className:'dsh-wel-dialog-title'},translate('dialog.renameSession')),h('button',{'aria-label':translate('dialog.close'),className:'dsh-wel-icon-button',disabled:busy,onClick:onCancel,title:translate('dialog.close'),type:'button'},'×')),h('div',{className:'dsh-wel-dialog-body'},h('input',{'aria-label':translate('dialog.sessionName'),autoFocus:true,className:'dsh-wel-dialog-input',disabled:busy,onChange:e=>onDraft(e.target.value),onFocus:e=>e.target.select(),onKeyDown:e=>{if(e.key==='Escape'){e.preventDefault();onCancel()}else if(e.key==='Enter'){e.preventDefault();onConfirm()}},value:draft}),error?h('div',{className:'dsh-wel-dialog-error',role:'alert'},error):null),h('div',{className:'dsh-wel-dialog-footer'},h('button',{className:'dsh-wel-text-button',disabled:busy,onClick:onCancel,type:'button'},translate('dialog.cancel')),h('button',{className:'dsh-wel-text-button',disabled:busy||draft.trim()==='',onClick:onConfirm,type:'button'},busy?translate('dialog.processing'):translate('dialog.rename')))))}
 function DeleteDialog({entry,busy,dirtyWarning,onCancel,onConfirm}){if(entry===undefined)return null;return h('div',{className:'dsh-wel-dialog-backdrop',onMouseDown:e=>{if(e.target===e.currentTarget&&!busy)onCancel()}},h('div',{'aria-modal':true,className:'dsh-wel-dialog',role:'dialog'},h('div',{className:'dsh-wel-dialog-header'},h('div',{className:'dsh-wel-dialog-title'},translate('dialog.deleteTitle')),h('button',{'aria-label':translate('dialog.close'),className:'dsh-wel-icon-button',disabled:busy,onClick:onCancel,title:translate('dialog.close'),type:'button'},'×')),h('div',{className:'dsh-wel-dialog-body'},h('div',{className:'dsh-wel-dialog-message'},translate('dialog.deleteMessage',{name:entry.name})),dirtyWarning?h('div',{className:'dsh-wel-dialog-warning',role:'alert'},translate('dialog.deleteDirtyWarning')):null),h('div',{className:'dsh-wel-dialog-footer'},h('button',{className:'dsh-wel-text-button',disabled:busy,onClick:onCancel,type:'button'},translate('dialog.cancel')),h('button',{className:'dsh-wel-danger-button dsh-wel-text-button',disabled:busy,onClick:onConfirm,type:'button'},busy?translate('dialog.processing'):translate('dialog.deleteAction')))))}
 /* Save-time three-way merge conflict prompt: the file changed on disk by
-   another tool and the changes overlap the local edits. Shows each conflicting
-   region (mine vs theirs) and lets the user pick which version to keep. */
-function SaveConflictDialog({conflict,onResolve}){if(conflict===undefined)return null;return h('div',{className:'dsh-wel-dialog-backdrop',onMouseDown:e=>{if(e.target===e.currentTarget)onResolve('cancel')}},h('div',{'aria-modal':true,className:'dsh-wel-dialog',role:'dialog'},h('div',{className:'dsh-wel-dialog-header'},h('div',{className:'dsh-wel-dialog-title'},translate('dialog.saveConflictTitle')),h('button',{'aria-label':translate('dialog.close'),className:'dsh-wel-icon-button',onClick:()=>onResolve('cancel'),title:translate('dialog.close'),type:'button'},'×')),h('div',{className:'dsh-wel-dialog-body'},h('div',{className:'dsh-wel-dialog-message'},translate('dialog.saveConflictMessage')),conflict.conflicts.map((region,index)=>h('div',{className:'dsh-wel-conflict-region',key:index},h('div',{className:'dsh-wel-conflict-region-title'},translate('dialog.saveConflictRegion',{lines:region.start===region.end-1?String(region.start+1):`${region.start+1}–${region.end}`})),h('div',{className:'dsh-wel-conflict-cols'},h('div',{className:'dsh-wel-conflict-col dsh-wel-conflict-mine'},h('div',{className:'dsh-wel-conflict-col-label'},translate('dialog.saveConflictMine')),h('pre',{className:'dsh-wel-conflict-code'},region.mine.join('\n'))),h('div',{className:'dsh-wel-conflict-col dsh-wel-conflict-theirs'},h('div',{className:'dsh-wel-conflict-col-label'},translate('dialog.saveConflictTheirs')),h('pre',{className:'dsh-wel-conflict-code'},region.theirs.join('\n'))))))),h('div',{className:'dsh-wel-dialog-footer'},h('button',{className:'dsh-wel-text-button',onClick:()=>onResolve('cancel'),type:'button'},translate('dialog.cancel')),h('button',{className:'dsh-wel-text-button',onClick:()=>onResolve('theirs'),type:'button'},translate('dialog.saveConflictKeepTheirs')),h('button',{className:'dsh-wel-danger-button dsh-wel-text-button',onClick:()=>onResolve('mine'),type:'button'},translate('dialog.saveConflictKeepMine')))))}
+   another tool and the changes overlap the local edits. Each conflicting
+   region is reviewed one at a time (mine vs theirs) in a large dialog; the
+   footer walks the regions and the final pick set is handed back as
+   { choices } (one 'mine'/'theirs' per conflict, in order) or 'cancel'. */
+function SaveConflictDialog({conflict,fontSize,onResolve}) {
+  const [index, setIndex] = useState(0)
+  const [choices, setChoices] = useState([])
+  if (conflict === undefined) return null
+  const total = conflict.conflicts.length
+  const current = Math.min(index, total - 1)
+  const region = conflict.conflicts[current]
+  const pick = (side) => {
+    const next = [...choices, side]
+    if (current + 1 < total) {
+      setChoices(next)
+      setIndex(current + 1)
+    } else {
+      onResolve({ choices: next })
+    }
+  }
+  const goBack = () => {
+    if (current === 0) return
+    setIndex(current - 1)
+    setChoices(prev => prev.slice(0, current))
+  }
+  return h('div', { className: 'dsh-wel-dialog-backdrop', onMouseDown: (e) => { if (e.target === e.currentTarget) onResolve('cancel') } },
+    h('div', { 'aria-modal': true, className: 'dsh-wel-dialog dsh-wel-conflict-dialog', role: 'dialog', style: fontSize === undefined ? undefined : { '--dsh-wel-conflict-font-size': `${fontSize}px` } },
+      h('div', { className: 'dsh-wel-dialog-header' },
+        h('div', { className: 'dsh-wel-dialog-title' },
+          translate('dialog.saveConflictTitle'),
+          total > 1 ? h('span', { className: 'dsh-wel-conflict-progress' }, `${current + 1} / ${total}`) : null),
+        h('button', { 'aria-label': translate('dialog.close'), className: 'dsh-wel-icon-button', onClick: () => onResolve('cancel'), title: translate('dialog.close'), type: 'button' }, '×')),
+      h('div', { className: 'dsh-wel-dialog-body' },
+        h('div', { className: 'dsh-wel-dialog-message' }, translate('dialog.saveConflictMessage')),
+        h('div', { className: 'dsh-wel-conflict-region' },
+          h('div', { className: 'dsh-wel-conflict-region-title' },
+            translate('dialog.saveConflictRegion', { lines: region.start === region.end - 1 ? String(region.start + 1) : `${region.start + 1}–${region.end}` })),
+          h('div', { className: 'dsh-wel-conflict-cols' },
+            h('div', { className: 'dsh-wel-conflict-col dsh-wel-conflict-mine' },
+              h('div', { className: 'dsh-wel-conflict-col-label' }, translate('dialog.saveConflictMine')),
+              h('pre', { className: 'dsh-wel-conflict-code' }, diffRows(region.base, region.mine))),
+            h('div', { className: 'dsh-wel-conflict-col dsh-wel-conflict-theirs' },
+              h('div', { className: 'dsh-wel-conflict-col-label' }, translate('dialog.saveConflictTheirs')),
+              h('pre', { className: 'dsh-wel-conflict-code' }, diffRows(region.base, region.theirs)))),
+          h('div', { className: 'dsh-wel-conflict-cols dsh-wel-conflict-cols-final' },
+            h('div', { className: 'dsh-wel-conflict-col dsh-wel-conflict-mine' },
+              h('div', { className: 'dsh-wel-conflict-col-label' }, translate('dialog.saveConflictMineFinal')),
+              h('pre', { className: 'dsh-wel-conflict-code' }, region.mine.join('\n'))),
+            h('div', { className: 'dsh-wel-conflict-col dsh-wel-conflict-theirs' },
+              h('div', { className: 'dsh-wel-conflict-col-label' }, translate('dialog.saveConflictTheirsFinal')),
+              h('pre', { className: 'dsh-wel-conflict-code' }, region.theirs.join('\n'))))),
+      h('div', { className: 'dsh-wel-dialog-footer' },
+        h('button', { className: 'dsh-wel-text-button', onClick: () => onResolve('cancel'), type: 'button' }, translate('dialog.cancel')),
+        h('button', { className: 'dsh-wel-text-button', disabled: current === 0, onClick: goBack, type: 'button' }, translate('dialog.saveConflictPrev')),
+        h('button', { className: 'dsh-wel-text-button', onClick: () => pick('theirs'), type: 'button' }, translate('dialog.saveConflictKeepTheirs')),
+        h('button', { className: 'dsh-wel-danger-button dsh-wel-text-button', onClick: () => pick('mine'), type: 'button' }, translate('dialog.saveConflictKeepMine'))))))}
+
 
 function revealPosition(view, reveal) {
   const lineNumber = Math.min(Math.max(1, reveal.line), view.state.doc.lines)
@@ -4099,8 +4267,9 @@ function WorkspaceExplorer({
         return ok
       }
       // Overlapping changes → ask the user to pick; keep the tab busy so no
-      // auto-save races the pending decision.
-      const dialog = { path, mine: text, theirs: diskText, diskRevision, encoding, savedStatusText, conflicts: merged.conflicts }
+      // auto-save races the pending decision. The dialog walks every conflict
+      // and the merge skeleton (merged.merged) is resolved against its picks.
+      const dialog = { path, mine: text, theirs: diskText, diskRevision, encoding, savedStatusText, conflicts: merged.conflicts, merged: merged.merged }
       conflictDialogRef.current = dialog
       setConflictDialog(dialog)
       return false
@@ -4124,34 +4293,47 @@ function WorkspaceExplorer({
     }
   }, [activeTab, baseText, commitTab, dirty, draft, preview, readFile, saveFile, saving, updateTab, workspace.workspaceId])
 
-  /* Resolve the pending save conflict: 'mine' overwrites the disk version,
-     'theirs' adopts the disk version and discards the local edits, 'cancel'
-     aborts the save and keeps editing. */
-  const resolveConflict = useCallback(async (choice) => {
+  /* Resolve the pending save conflict. The dialog walks the conflicts one at a
+     time and calls back with { choices } (one 'mine'/'theirs' per conflict, in
+     order) or 'cancel'. The resolved file is the merge skeleton — every
+     non-conflicting change already applied — with each conflict marker line
+     replaced by the chosen side's lines. */
+  const resolveConflict = useCallback(async (result) => {
     const dialog = conflictDialogRef.current
     if (dialog === undefined) return
     conflictDialogRef.current = undefined
     setConflictDialog(undefined)
-    const { path, mine, theirs, diskRevision, encoding, savedStatusText } = dialog
+    const { path, diskRevision, encoding, savedStatusText, conflicts, merged } = dialog
     const tab = tabsRef.current.find(item => item.path === path)
     if (tab === undefined) return
     const finish = () => {
       updateTab(path, { saving: false })
       if (activePathRef.current === path) setSaving(false)
     }
-    if (choice === 'cancel') {
+    if (result === 'cancel') {
       setStatus({ text: translate('editor.saveCancelled') })
       finish()
       return
     }
+    const choices = Array.isArray(result?.choices) ? result.choices : []
+    // Rebuild the resolved file line-by-line from the merge skeleton: every
+    // non-conflicting change is already applied, and each conflict marker line
+    // is replaced by the chosen side's lines. Splicing an empty side removes
+    // the marker line entirely (a deletion), which a string replace cannot do.
+    const resolvedLines = merged.split('\n')
+    for (let i = conflicts.length - 1; i >= 0; i -= 1) {
+      const side = choices[i] === 'theirs' ? 'theirs' : 'mine'
+      const markerIndex = resolvedLines.indexOf(`__DSH_CONFLICT_${i}__`)
+      if (markerIndex !== -1) resolvedLines.splice(markerIndex, 1, ...conflicts[i][side])
+    }
+    const resolved = resolvedLines.join('\n')
     try {
-      const ok = choice === 'mine'
-        ? await commitTab(path, mine, diskRevision ?? tab.revision, encoding, savedStatusText)
-        : await commitTab(path, theirs, diskRevision ?? tab.revision, encoding, savedStatusText)
-      if (choice === 'theirs' && ok && activePathRef.current === path) {
-        // Adopting the disk version: show it in the editor.
+      const ok = await commitTab(path, resolved, diskRevision ?? tab.revision, encoding, savedStatusText)
+      if (ok && activePathRef.current === path) {
+        // The resolved file can differ from both sides (mixed picks), so show
+        // it in the editor explicitly.
         const view = editorRef.current
-        if (view !== undefined) view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: theirs } })
+        if (view !== undefined) view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: resolved } })
       }
       if (!ok) setStatus({ error: true, text: translate('editor.saveConflict') })
     } catch (error) {
@@ -4680,7 +4862,7 @@ function WorkspaceExplorer({
     encodingMenu ? h(EncodingMenu, { canOpen: !dirty, canSave: preview.state === 'ready' && preview.editable !== false && !preview.readOnlyReason, menuRef: encodingMenuRef, onOpen: () => openEncodingDialog('open'), onSave: () => openEncodingDialog('save'), x: encodingMenu.x, y: encodingMenu.y }) : null,
     encodingDialog ? h(EncodingDialog, { busy: encodingDialog.mode === 'save' && saving, dialog: encodingDialog, onCancel: closeEncodingDialog, onConfirm: confirmEncodingDialog, onPick: setEncodingPick, options: encodingOptions, value: encodingPick }) : null,
     deleteDialog ? h(DeleteDialog, { busy: deleteBusy, dirtyWarning: tabs.some(tab => tab.dirty && (tab.path === deleteDialog.path || tab.path.startsWith(`${deleteDialog.path}/`))), entry: deleteDialog, onCancel: closeDeleteDialog, onConfirm: confirmDelete }) : null,
-    conflictDialog ? h(SaveConflictDialog, { conflict: conflictDialog, onResolve: resolveConflict }) : null,
+    conflictDialog ? h(SaveConflictDialog, { conflict: conflictDialog, fontSize: clamp(settings.conflictFontSize ?? CONFLICT_FONT_SIZE_DEFAULT, CONFLICT_FONT_SIZE_MIN, CONFLICT_FONT_SIZE_MAX), onResolve: resolveConflict }) : null,
     sessionRenameOpen ? h(SessionRenameDialog, {
       busy: sessionRenameBusy,
       draft: sessionRenameDraft,
@@ -4751,6 +4933,7 @@ function EmptyWorkspaceExplorer({ treePortalTarget, sessionTitle }) {
   const settings = useSyncExternalStore(settingsStore.subscribe, settingsStore.getSnapshot)
   const rowHeight = clamp(settings.rowHeight ?? ROW_HEIGHT_DEFAULT, ROW_HEIGHT_MIN, ROW_HEIGHT_MAX)
   const chatFontSize = settings.chatFontSize ?? CHAT_FONT_SIZE_DEFAULT
+  const conflictFontSize = clamp(settings.conflictFontSize ?? CONFLICT_FONT_SIZE_DEFAULT, CONFLICT_FONT_SIZE_MIN, CONFLICT_FONT_SIZE_MAX)
   const customizedCount = Object.keys(settings.fileColors ?? {}).length
   const customizedPresetCount = Object.keys(settings.highlightPresets ?? {}).length
   return h('div', { className: 'dsh-wel-explorer-settings' },
@@ -4844,6 +5027,27 @@ function EmptyWorkspaceExplorer({ treePortalTarget, sessionTitle }) {
           onClick: () => settingsStore.actions.resetHighlightPresets(),
           type: 'button',
         }, translate('settings.resetAllPresets'))),
+      h('div', { className: 'dsh-wel-settings-row' },
+        h('label', { className: 'dsh-wel-settings-label', htmlFor: 'dsh-wel-conflict-font-size' }, translate('settings.conflictFontSize')),
+        h('input', {
+          'aria-label': translate('settings.conflictFontSize'),
+          className: 'dsh-wel-settings-slider',
+          id: 'dsh-wel-conflict-font-size',
+          max: CONFLICT_FONT_SIZE_MAX,
+          min: CONFLICT_FONT_SIZE_MIN,
+          onChange: e => settingsStore.actions.setConflictFontSize(Number(e.target.value)),
+          step: 1,
+          type: 'range',
+          value: conflictFontSize,
+        }),
+        h('span', { className: 'dsh-wel-settings-value' }, `${conflictFontSize}px`),
+        h('button', {
+          className: 'dsh-wel-text-button',
+          disabled: conflictFontSize === CONFLICT_FONT_SIZE_DEFAULT || undefined,
+          onClick: () => settingsStore.actions.setConflictFontSize(CONFLICT_FONT_SIZE_DEFAULT),
+          title: translate('settings.conflictFontSize.reset.title'),
+          type: 'button',
+        }, translate('settings.resetDefault'))),
     ),
     h('div', { className: 'dsh-wel-explorer-divider' }),
     h('div', { className: 'dsh-wel-settings-group' },
