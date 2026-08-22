@@ -60,6 +60,20 @@ const THINK_COLLAPSE_DELAY_MAX_S = 10
 const THINK_COLLAPSE_DELAY_STEP_S = 0.1
 const EXPLORER_SETTINGS_STORE_KEY = 'dsh.workspace.explorer.settings.v1'
 const EXPLORER_LAYOUT_STORE_KEY = 'dsh.workspace.explorer.layout.v1'
+/* Mobile (phone-column) mode, mirroring the dsh-mobile-preview approach: a
+   document-class gate drives every layout override, and the floating-drawer
+   and file-fullscreen states ride sibling classes so the whole chrome stays in
+   sync. The state is transient (not persisted): a reload returns to the
+   desktop layout. */
+const MOBILE_CLASS = 'dsh-wel-mobile-on'
+const MOBILE_DRAWER_CLASS = 'dsh-wel-mobile-drawer-open'
+const MOBILE_FILES_CLASS = 'dsh-wel-mobile-files-on'
+const MOBILE_WIDTH = 430
+const MOBILE_DRAWER_WIDTH = 280
+const MOBILE_HEADER_FALLBACK_H = 52
+/* DeepSeek fish logo path (ui-primitives FishLogo); the svg uses a padded
+   viewBox so the 1.4-wide stroke is not clipped. */
+const FISH = 'M22.9168 1.43018C22.6713 1.31018 22.5658 1.53918 22.4223 1.65519C22.3733 1.69269 22.3318 1.74169 22.2903 1.78669C21.9317 2.1697 21.5127 2.42121 20.9657 2.39121C20.1657 2.34621 19.4827 2.59771 18.8787 3.20973C18.7502 2.45521 18.3236 2.0047 17.6746 1.71569C17.3351 1.56568 16.9916 1.41518 16.7536 1.08867C16.5876 0.856163 16.5421 0.597155 16.4591 0.341647C16.4061 0.187643 16.3536 0.0301382 16.1761 0.00363739C15.9836 -0.0263635 15.9081 0.135141 15.8326 0.270145C15.5306 0.822162 15.4136 1.43018 15.4251 2.0462C15.4516 3.43174 16.0366 4.53527 17.1991 5.3203C17.3311 5.4103 17.3651 5.5003 17.3236 5.63181C17.2441 5.90231 17.1501 6.16482 17.0671 6.43533C17.0141 6.60784 16.9351 6.64584 16.7501 6.57033C16.1121 6.30383 15.5611 5.90931 15.074 5.4328C14.2475 4.63328 13.5 3.75075 12.568 3.05973C12.349 2.89822 12.13 2.74822 11.9034 2.60522C10.9524 1.68169 12.028 0.923165 12.277 0.833162C12.5375 0.739159 12.3675 0.41615 11.5259 0.42015C10.6844 0.42365 9.91439 0.705658 8.93286 1.08117C8.78935 1.13767 8.63835 1.17867 8.48384 1.21267C7.59332 1.04367 6.66829 1.00617 5.70226 1.11517C3.88321 1.31768 2.43016 2.1777 1.36213 3.64575C0.0790928 5.4103 -0.222916 7.41536 0.146595 9.50642C0.535106 11.7105 1.66014 13.535 3.38869 14.9616C5.18125 16.4406 7.24581 17.1657 9.60138 17.0266C11.0319 16.9441 12.6245 16.7526 14.421 15.2321C14.874 15.4576 15.3496 15.5476 16.1381 15.6151C16.7456 15.6716 17.3306 15.5851 17.7836 15.4911C18.4931 15.3411 18.4441 14.6841 18.1876 14.5636C16.1081 13.595 16.5646 13.9891 16.1496 13.67C17.2061 12.42 18.8202 10.1979 19.3182 7.17235C19.3672 6.83834 19.4297 6.36783 19.4222 6.09732C19.4182 5.93231 19.4562 5.86831 19.6447 5.84931C20.1657 5.78931 20.6712 5.64681 21.1357 5.3913C22.4833 4.65528 23.0268 3.44624 23.1548 1.9972C23.1738 1.77569 23.1508 1.54668 22.9168 1.43018ZM11.1749 14.4736C9.15936 12.889 8.18184 12.3675 7.77832 12.39C7.40081 12.4125 7.46881 12.8445 7.55182 13.126C7.63882 13.404 7.75182 13.5955 7.91033 13.8396C8.01983 14.0011 8.09533 14.2411 7.80083 14.4216C7.15181 14.8231 6.02327 14.2866 5.97027 14.2601C4.65673 13.4865 3.5587 12.4655 2.78467 11.069C2.03715 9.72493 1.60314 8.28289 1.53164 6.74384C1.51264 6.37233 1.62214 6.24082 1.99215 6.17332C2.47916 6.08332 2.98118 6.06432 3.46769 6.13582C5.52476 6.43633 7.27581 7.35586 8.74385 8.8129C9.58188 9.64243 10.2159 10.634 10.8689 11.6025C11.5634 12.631 12.3105 13.611 13.262 14.4146C13.598 14.6961 13.866 14.9101 14.1225 15.0681C13.349 15.1546 12.058 15.1731 11.1749 14.4746L11.1749 14.4736ZM12.141 8.25988C12.141 8.09488 12.273 7.96338 12.439 7.96338C12.4765 7.96338 12.5105 7.97088 12.541 7.98188C12.5825 7.99688 12.6205 8.01938 12.6505 8.05338C12.7035 8.10588 12.7335 8.18088 12.7335 8.25988C12.7335 8.42489 12.6015 8.55639 12.4355 8.55639C12.2695 8.55639 12.141 8.42489 12.141 8.25988ZM15.1415 9.79893C14.949 9.87793 14.7565 9.94544 14.5715 9.95294C14.2845 9.96794 13.9715 9.85143 13.8015 9.70893C13.5375 9.48742 13.3485 9.36342 13.2695 8.97691C13.2355 8.8119 13.2545 8.55639 13.2845 8.40989C13.3525 8.09438 13.277 7.89187 13.0545 7.70787C12.8735 7.55786 12.643 7.51636 12.39 7.51636C12.2955 7.51636 12.209 7.47486 12.1445 7.44136C12.039 7.38886 11.9519 7.25735 12.035 7.09585C12.0615 7.04335 12.19 6.91584 12.22 6.89334C12.5635 6.69784 12.9595 6.76184 13.326 6.90834C13.6655 7.04735 13.9225 7.30236 14.292 7.66287C14.6695 8.09838 14.7375 8.21838 14.9525 8.54539C15.1225 8.8009 15.277 9.06341 15.3831 9.36392C15.4471 9.55142 15.3641 9.70493 15.1415 9.79893Z'
 
 /* File encodings offered by the right-click encoding actions. The server owns
  * the authoritative list (/api/encodings); this fallback mirrors it so the
@@ -117,9 +131,6 @@ const EXPLORER_LOCALE_NS = 'workspace.explorer'
 const zh = {
   'nav.sessions': '会话列表',
   'nav.files': '文件浏览',
-  'nav.explorer': '资源管理器',
-  'nav.explorer.open': '打开资源管理器',
-  'nav.explorer.close': '关闭资源管理器',
   'panel.workspaceFiles': '工作区文件',
   'panel.noWorkspace': '未选择工作区',
   'panel.chooseSession': '请选择一个工作区中的会话',
@@ -413,13 +424,14 @@ const zh = {
   'init.error.no-workspace': '无法确定当前会话所属的工作区，无法执行 /init',
   'init.error.send-failed': '发送 /init 指令失败：{message}',
   'init.prompt': '为当前工作区生成（或更新）根目录的 AGENTS.md 文档。\n\n工作区根目录：{root}\n\n要求：\n1. 先分析该工作区的项目背景：README、构建与依赖清单（如 package.json / pyproject.toml / Cargo.toml / go.mod 等）、源码目录结构与主要语言。\n2. 在根目录生成 AGENTS.md，内容应包含：项目简介、常用命令（构建 / 测试 / 检查 / 运行）、技术栈、目录结构、代码与协作约定。\n3. AGENTS.md 应当语言精炼准确，只保留必要内容；复杂的逻辑（如架构设计、数据流、模块说明、事故复盘等）不要写进 AGENTS.md，而是新建 docs 文件夹，将复杂逻辑整理成 Markdown 文档写入 docs 文件夹，并在 AGENTS.md 中引用这些文档。\n4. 若 AGENTS.md 已存在：保留其中有价值的内容，在此基础上合并更新，不要盲目覆盖。\n5. 文档语言与项目现有文档保持一致（中文项目用中文，英文项目用英文）。\n6. 完成后简要说明生成或更新了哪些内容。',
+  'mobile.toggle': '手机模式',
+  'mobile.sidebarOpen': '展开侧栏',
+  'mobile.sidebarClose': '收起侧栏',
+  'mobile.files': '文件内容浏览',
 }
 const en = {
   'nav.sessions': 'Sessions',
   'nav.files': 'File Explorer',
-  'nav.explorer': 'Explorer',
-  'nav.explorer.open': 'Open Explorer',
-  'nav.explorer.close': 'Close Explorer',
   'panel.workspaceFiles': 'Workspace Files',
   'panel.noWorkspace': 'No workspace selected',
   'panel.chooseSession': 'Select a session in a workspace',
@@ -713,6 +725,10 @@ const en = {
   'init.error.no-workspace': 'Cannot determine the workspace of the current session; /init cannot run',
   'init.error.send-failed': 'Failed to send the /init instruction: {message}',
   'init.prompt': 'Generate (or update) the AGENTS.md file at the workspace root.\n\nWorkspace root: {root}\n\nRequirements:\n1. First analyze the project background: the README, build and dependency manifests (e.g. package.json / pyproject.toml / Cargo.toml / go.mod), source layout, and primary languages.\n2. Generate AGENTS.md at the root, covering: project overview, common commands (build / test / check / run), tech stack, directory structure, and coding and collaboration conventions.\n3. Keep AGENTS.md concise and accurate, containing only what is necessary; do not put complex logic (such as architecture design, data flows, module details, incident postmortems) into AGENTS.md itself — instead create a docs folder, organize that complex logic into Markdown documents inside it, and reference them from AGENTS.md.\n4. If AGENTS.md already exists: keep the valuable content and merge updates on top of it; do not blindly overwrite.\n5. Write the document in the same language as the project\'s existing docs (Chinese for Chinese projects, English for English ones).\n6. Briefly summarize what you generated or updated when done.',
+  'mobile.toggle': 'Mobile mode',
+  'mobile.sidebarOpen': 'Open sidebar',
+  'mobile.sidebarClose': 'Close sidebar',
+  'mobile.files': 'Browse files',
 }
 /* CodeMirror search/goto-line panel phrases (EditorState.phrases keys; keep
    the $ placeholders). English is CodeMirror's built-in default, so the
@@ -761,6 +777,37 @@ function useLocaleText() {
 function localeIsZh() {
   return localeFace === undefined || localeFace.getSnapshot().active !== 'en'
 }
+/* ---- Mobile mode state ---- The document classes are the single source of
+   truth (the CSS gates and this store read the same classes), so a remount
+   re-derives the state instead of losing it. Components subscribe through
+   useMobile(); setMobile turns the gate on (and opens the floating drawer) or
+   off (and clears the drawer/files sub-states). */
+function mobileState() {
+  return {
+    on: document.documentElement.classList.contains(MOBILE_CLASS),
+    drawerOpen: document.documentElement.classList.contains(MOBILE_DRAWER_CLASS),
+    files: document.documentElement.classList.contains(MOBILE_FILES_CLASS),
+  }
+}
+let mobileSnapshot = typeof document === 'undefined' ? { on: false, drawerOpen: false, files: false } : mobileState()
+const mobileListeners = new Set()
+function notifyMobile() { mobileSnapshot = mobileState(); for (const listener of mobileListeners) listener() }
+const mobileFace = {
+  subscribe(callback) { mobileListeners.add(callback); return () => { mobileListeners.delete(callback) } },
+  getSnapshot() { return mobileSnapshot },
+}
+function setMobile(on) {
+  document.documentElement.classList.toggle(MOBILE_CLASS, on)
+  if (on) document.documentElement.classList.add(MOBILE_DRAWER_CLASS)
+  else {
+    document.documentElement.classList.remove(MOBILE_DRAWER_CLASS)
+    document.documentElement.classList.remove(MOBILE_FILES_CLASS)
+  }
+  notifyMobile()
+}
+function setDrawerOpen(open) { document.documentElement.classList.toggle(MOBILE_DRAWER_CLASS, open); notifyMobile() }
+function setMobileFiles(open) { document.documentElement.classList.toggle(MOBILE_FILES_CLASS, open); notifyMobile() }
+function useMobile() { return useSyncExternalStore(mobileFace.subscribe, mobileFace.getSnapshot) }
 /* Localize a plugin-API error: the Chinese surface keeps the server's own
    message verbatim; the English surface replaces known error codes with the
    dictionary and falls back to the server message or the client-side wrapper
@@ -804,7 +851,7 @@ const styles = `
 .dsh-wel-preview-header-meta{display:flex;align-items:center;gap:6px;min-width:0}.dsh-wel-preview-header-meta>span:not(.dsh-wel-language):not(.dsh-wel-encoding){overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:15px;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-language{flex:0 0 auto;padding:1px 5px;border-radius:4px;background:var(--dsw-alias-markdown-tag);color:var(--dsw-alias-label-secondary);font-size:9px;font-weight:600;line-height:14px;text-transform:uppercase}.dsh-wel-encoding{flex:0 0 auto;padding:1px 5px;border-radius:4px;background:var(--dsw-alias-markdown-tag);color:var(--dsw-alias-label-secondary);font-size:9px;font-weight:600;line-height:14px;text-transform:uppercase}.dsh-wel-dirty{color:var(--dsw-alias-state-warn-label);font-size:12px}.dsh-wel-preview-tabs{display:flex;align-items:stretch;gap:4px;min-width:0;padding:6px 8px;border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-specific-sidebar-fill);overflow-x:auto;overflow-y:hidden;scrollbar-width:thin}.dsh-wel-preview-tab{flex:none;display:flex;align-items:center;gap:5px;min-width:0;max-width:220px;height:28px;padding:0 5px 0 9px;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:18px;cursor:grab;box-sizing:border-box;white-space:nowrap}.dsh-wel-preview-tab:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsh-wel-preview-tab[data-active]{background:var(--dsw-alias-interactive-bg-active);color:var(--dsw-alias-label-primary)}.dsh-wel-preview-tab[data-dragging]{opacity:.7}.dsh-wel-preview-drop-indicator{flex:none;width:3px;height:20px;border-radius:2px;background:var(--dsw-alias-state-business-primary);align-self:center;pointer-events:none}.dsh-wel-preview-tab-button{display:flex;flex:1;align-items:center;gap:5px;min-width:0;height:100%;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}.dsh-wel-preview-tab-name{min-width:0;overflow:hidden;text-overflow:ellipsis}.dsh-wel-preview-tab-close{flex:none;display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border:0;border-radius:4px;background:transparent;color:inherit;font-size:14px;line-height:1;cursor:pointer}.dsh-wel-preview-tab-close:hover{background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary)}.dsh-wel-preview-tab-close:disabled{cursor:not-allowed;opacity:.45}.dsh-wel-preview-body{position:relative;flex:1;min-height:0;overflow:hidden;background:var(--dsw-alias-markdown-code-block)}.dsh-wel-editor-host{height:100%;min-width:0}.dsh-wel-editor-host .cm-editor{height:100%;background:var(--dsw-alias-markdown-code-block);color:var(--dsw-alias-label-primary)}.dsh-wel-editor-host .cm-scroller{font-family:var(--dsw-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:12px;line-height:19px;overflow:auto}.dsh-wel-editor-host .cm-gutters{background:var(--dsw-alias-markdown-code-block-banner);color:var(--dsw-alias-label-caption);border-right:1px solid var(--dsw-alias-border-l2)}.dsh-wel-editor-host .cm-activeLine,.dsh-wel-editor-host .cm-activeLineGutter{background:var(--dsw-alias-interactive-bg-hover)}.dsh-wel-editor-host .cm-selectionBackground,.dsh-wel-editor-host .cm-content ::selection{background:var(--dsw-alias-interactive-bg-active)!important}.dsh-wel-editor-host .cm-cursor{border-left-color:var(--dsw-alias-label-primary)}.dsh-wel-editor-host .cm-foldPlaceholder{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary)}.dsh-wel-editor-host .cm-panels{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}.dsh-wel-editor-host .cm-panel input{background:var(--dsw-alias-bg-base);border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary)}
 .dsh-wel-context-row{box-sizing:border-box;display:flex;align-items:center;gap:8px;flex:none;width:min(var(--dsh-composer-card-max-width),max(0px,calc(100% - (var(--dsh-composer-side-clearance) * 2))));margin:0 auto;padding:0}.dsh-wel-context-prefix{display:flex;flex:1;align-items:center;gap:6px;min-width:0;min-height:28px;padding:5px 8px 5px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:22px;background:var(--dsw-specific-input-major);color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;line-height:16px;text-align:left;cursor:pointer}.dsh-wel-context-prefix:hover{color:var(--dsw-alias-label-primary)}.dsh-wel-context-prefix:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}.dsh-wel-context-prefix[data-inactive]{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-caption);filter:grayscale(1)}.dsh-wel-context-prefix-mark{flex:none;font-size:12px}.dsh-wel-context-prefix-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-message-context-summary{box-sizing:border-box;display:flex;align-items:center;align-self:flex-end;gap:6px;max-width:100%;min-height:24px;padding:3px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:22px;background:var(--dsw-specific-input-major);color:var(--dsw-alias-label-secondary);font-size:11px;line-height:16px}.dsh-wel-message-context-summary-mark{flex:none;font-size:12px}.dsh-wel-message-context-summary-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-message-context-summary-range{flex:none;color:var(--dsw-alias-label-caption)}.dsh-wel-message-context-bubble[data-dsh-wel-empty-prompt]{display:none}
 .dsh-wel-banner{padding:7px 12px;border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-state-warn-tertiary);color:var(--dsw-alias-state-warn-label);font-size:11px;line-height:16px}.dsh-wel-banner-actions{display:flex;gap:6px;margin-top:5px}.dsh-wel-status{padding:5px 12px;border-bottom:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-tertiary);font-size:11px}.dsh-wel-status[data-error]{color:var(--dsw-alias-state-error-primary)}.dsh-wel-error-card{max-width:300px;padding:14px 16px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:19px;text-align:left}.dsh-wel-dialog-backdrop{position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;padding:20px;background:var(--dsw-alias-bg-mask-1,rgba(0,0,0,.38));box-sizing:border-box}.dsh-wel-dialog{width:min(360px,100%);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-elevated,0 12px 36px rgba(0,0,0,.24));box-sizing:border-box}.dsh-wel-dialog-header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 14px;border-bottom:1px solid var(--dsw-alias-border-l2)}.dsh-wel-dialog-title{min-width:0;overflow:hidden;color:var(--dsw-alias-label-primary);font-size:13px;font-weight:600;line-height:18px;text-overflow:ellipsis;white-space:nowrap}.dsh-wel-dialog-body{display:flex;flex-direction:column;gap:8px;padding:14px}.dsh-wel-dialog-input{width:100%;height:32px;padding:0 9px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;box-sizing:border-box}.dsh-wel-dialog-input:focus{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-1px}.dsh-wel-dialog-error{color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:18px}.dsh-wel-dialog-message{color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px}.dsh-wel-dialog-warning{color:var(--dsw-alias-state-warn-label);font-size:12px;line-height:18px}.dsh-wel-danger-button{color:var(--dsw-alias-state-error-primary)}.dsh-wel-dialog-footer{display:flex;justify-content:flex-end;gap:8px;padding:0 14px 14px}
-.dsh-wel-frame [data-slot='sidebar.footer.action']{display:flex!important;flex-direction:column;align-items:stretch;width:100%;min-width:0}.dsh-wel-explorer-toggle{flex:none;display:flex;align-items:center;gap:8px;width:calc(100% + 8px);height:34px;margin:4px -4px 4px;padding:6px 2px 6px 10px;box-sizing:border-box;border:0;border-radius:12px;background:transparent;cursor:pointer;overflow:hidden;color:var(--dsw-alias-label-secondary);font-family:inherit;font-size:14px;line-height:22px;text-align:left}.dsh-wel-explorer-toggle:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsh-wel-explorer-toggle[data-open]{color:var(--dsw-alias-brand-primary)}.dsh-wel-explorer-toggle[data-rail]{width:36px;height:36px;margin:8px 0 10px;justify-content:center;gap:0;padding:0;border-radius:50%}.dsh-wel-explorer-toggle:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-2px}.dsh-wel-explorer-icon{flex:none;width:16px;height:16px}.dsh-wel-explorer-toggle[data-rail] .dsh-wel-explorer-icon{width:18px;height:18px}.dsh-wel-explorer-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsh-wel-frame [data-slot='sidebar.footer.action']{display:flex!important;flex-direction:column;align-items:stretch;width:100%;min-width:0}
 .dsh-wel-splitter{position:absolute;top:0;bottom:0;z-index:8;width:8px;margin-left:-4px;border:0;background:transparent;cursor:col-resize;touch-action:none}.dsh-wel-splitter::after{content:'';position:absolute;top:0;bottom:0;left:3px;width:2px;background:transparent;transition:background var(--ds-transition-duration-fast) var(--ds-ease-in-out)}.dsh-wel-splitter:hover::after,.dsh-wel-splitter[data-dragging]::after,.dsh-wel-splitter:focus-visible::after{background:var(--dsw-alias-state-business-primary)}.dsh-wel-details{position:absolute;z-index:16;top:0;right:0;bottom:0;width:min(440px,45vw);overflow:hidden;border-left:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-elevated,0 12px 36px var(--dsw-alias-bg-mask-1));transform:translateX(0);opacity:1;transition:transform var(--ds-transition-duration-slow) var(--ds-ease-in-out),opacity var(--ds-transition-duration-fast) var(--ds-ease-in-out)}.dsh-wel-details[data-closed]{pointer-events:none;visibility:hidden;transform:translateX(100%);opacity:0}.dsh-wel-overlay{position:absolute;inset:0;z-index:20;pointer-events:none}.dsh-wel-overlay>*{pointer-events:auto}.dsh-wel-tree{position:relative}.dsh-wel-context-menu{position:fixed;z-index:40;min-width:168px;padding:6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-elevated,0 12px 36px rgba(0,0,0,.24));box-sizing:border-box}.dsh-wel-context-item{display:block;width:100%;height:30px;padding:0 10px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:30px;text-align:left;cursor:pointer;box-sizing:border-box}.dsh-wel-context-item:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsh-wel-context-item:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-2px}.dsh-wel-context-item:disabled{cursor:not-allowed;opacity:.5}.dsh-wel-context-item:disabled:hover{background:transparent;color:var(--dsw-alias-label-primary)}.dsh-wel-context-separator{height:1px;margin:4px 0;border:0;background:var(--dsw-alias-border-l2)}.dsh-wel-copy-notice{position:absolute;right:10px;bottom:10px;z-index:12;padding:5px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-size:11px;line-height:16px;box-shadow:var(--dsw-shadow-elevated,0 4px 12px rgba(0,0,0,.18))}@media(prefers-reduced-motion:reduce){.dsh-wel-frame,.dsh-wel-details,.dsh-wel-splitter::after{transition:none}}
 .dsh-wel-search-header{flex-direction:column;align-items:stretch;gap:8px;padding:8px}
 .dsh-wel-search-input-row{display:flex;align-items:center;gap:6px}
@@ -952,6 +999,52 @@ body > [role="status"]{display:none!important}
 @keyframes dsh-wel-toast-in{from{opacity:0;transform:translate(-50%,-6px)}to{opacity:1;transform:translate(-50%,0)}}
 @keyframes dsh-wel-toast-fade{to{opacity:0}}
 @media (prefers-reduced-motion: reduce){.dsh-wel-toast{animation:dsh-wel-toast-fade 1000ms ease 3000ms forwards}}
+/* ── Mobile (phone-column) mode ─────────────────────────────────────────
+   Mirror of dsh-mobile-preview: the document-class gate (dsh-wel-mobile-on)
+   drives every override; the floating sidebar drawer and the file-fullscreen
+   view ride sibling classes. Desktop layout is untouched when the gate is
+   absent. In-flow order of the frame is aside(1) preview(2) chat(3); the
+   aside becomes an absolute drawer, so explicit grid-column keeps each
+   section in the phone track. */
+.dsh-wel-mobile-toggle{flex:none;display:flex;align-items:center;gap:8px;width:calc(100% + 8px);height:34px;margin:4px -4px 4px;padding:6px 2px 6px 10px;box-sizing:border-box;border:0;border-radius:12px;background:transparent;cursor:pointer;overflow:hidden;color:var(--dsw-alias-label-primary);font-family:inherit;font-size:14px;line-height:22px;text-align:left}.dsh-wel-mobile-toggle:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dsh-wel-mobile-toggle[data-open]{color:var(--dsw-alias-brand-primary)}.dsh-wel-mobile-toggle[data-rail]{width:36px;height:36px;margin:8px 0 10px;justify-content:center;gap:0;padding:0;border-radius:50%}.dsh-wel-mobile-toggle:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-2px}.dsh-wel-mobile-toggle-icon{flex:none;width:16px;height:16px}.dsh-wel-mobile-toggle[data-rail] .dsh-wel-mobile-toggle-icon{width:18px;height:18px}.dsh-wel-mobile-toggle-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+html.dsh-wel-mobile-on .dsh-wel-frame{grid-template-columns:0 minmax(0,430px) 0!important;justify-content:center}
+html.dsh-wel-mobile-on .dsh-wel-chat{grid-column:2}
+html.dsh-wel-mobile-on .dsh-wel-preview{display:none}
+html.dsh-wel-mobile-on .dsh-wel-sidebar{position:absolute;top:0;bottom:0;left:0;z-index:30;width:min(280px,85vw);box-shadow:8px 0 24px #0000002e;transform:translateX(-100%);transition:transform .2s var(--ds-ease-in-out)}
+html.dsh-wel-mobile-on .dsh-wel-sidebar [data-slot="sidebar"] > div{width:100%!important}
+html.dsh-wel-mobile-on.dsh-wel-mobile-drawer-open .dsh-wel-sidebar{transform:translateX(0)}
+html.dsh-wel-mobile-on .dsh-wel-splitter{display:none}
+html.dsh-wel-mobile-on .dsh-wel-details{display:none}
+html.dsh-wel-mobile-on [data-slot="sidebar"] > div > div:first-child > button:last-child{display:none}
+.dsh-wel-mobile-scrim{position:absolute;inset:0;z-index:25;background:#00000047}
+/* File content browsing fills the phone column below the pinned conversation
+   header (height measured into --dsh-wel-mobile-header-h); the chat's scroll
+   area (messages + composer) is hidden so only the header stays reachable. */
+html.dsh-wel-mobile-on.dsh-wel-mobile-files-on .dsh-wel-frame{grid-template-columns:0 minmax(0,430px) 0!important}
+html.dsh-wel-mobile-on.dsh-wel-mobile-files-on .dsh-wel-preview{display:flex;grid-column:2;visibility:visible;pointer-events:auto;box-sizing:border-box;padding-top:var(--dsh-wel-mobile-header-h,52px)}
+html.dsh-wel-mobile-on.dsh-wel-mobile-files-on .dsh-wel-chat{position:fixed;top:0;left:50%;width:min(430px,100%);margin-left:calc(min(430px,100%) / -2);z-index:3;height:var(--dsh-wel-mobile-header-h,52px);overflow:hidden}
+html.dsh-wel-mobile-on.dsh-wel-mobile-files-on .dsh-wel-chat [data-slot="conversation"] [data-conversation-scroll]{display:none}
+/* In file-fullscreen the conversation's view tabs (chat/trajectory) are pinned
+   with the title row; they belong to the chat, not the file page, so they are
+   hidden and the file content starts flush under the title row (which is also
+   what --dsh-wel-mobile-header-h measures after this rule applies). */
+html.dsh-wel-mobile-on.dsh-wel-mobile-files-on [data-slot="conversation.session.header"] > header > div[role="tablist"]{display:none}
+/* Session-header controls: hidden outside mobile, inline at the phone column's
+   top-left in mobile (whale first, file button right after it). */
+.dsh-wel-mobile-controls{display:none;align-items:center;gap:2px}
+html.dsh-wel-mobile-on .dsh-wel-mobile-controls{display:flex;order:-1}
+.dsh-wel-mobile-whale,.dsh-wel-mobile-files{display:grid;place-items:center;width:32px;height:32px;padding:0;border:0;border-radius:10px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer}
+.dsh-wel-mobile-whale:hover,.dsh-wel-mobile-files:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.dsh-wel-mobile-active{color:var(--dsw-alias-brand-primary)}
+.dsh-wel-mobile-files-icon{width:16px;height:16px}
+html.dsh-wel-mobile-on [data-slot="conversation.session.header"] > header > div:first-child > div:first-child,html.dsh-wel-mobile-on [data-slot="conversation.session.header"] > header > div:first-child > div:first-child > div:nth-child(2){display:contents}
+html.dsh-wel-mobile-on [data-slot="conversation.session.header"] > header > div:first-child > nav{flex:1}
+html.dsh-wel-mobile-on [data-slot="conversation.session.header.utilities"]{display:none!important}
+/* Hero whale + file button: a frame-level overlay visible only on the
+   blank-session hero (the :has gate mirrors ConversationRoot's own hero
+   decision). */
+.dsh-wel-mobile-hero{display:none;position:absolute;top:10px;left:calc(max(0px,50% - 215px) + 8px)}
+html.dsh-wel-mobile-on:has([data-slot="conversation"] [data-phase="hero"]) .dsh-wel-mobile-hero{display:flex;align-items:center;gap:2px}
 `
 
 const tokenHighlight = HighlightStyle.define([
@@ -1340,7 +1433,7 @@ function createExplorerPaneStore() {
       setTree: (draft, width, max = TREE_MAX) => { draft.tree = clamp(width, TREE_MIN, max) },
       setPreview: (draft, width, max = PREVIEW_MAX) => { draft.preview = clamp(width, PREVIEW_MIN, max) },
       setSidebar: (draft, width) => { draft.sidebar = width === 0 ? 0 : Math.max(SIDEBAR_MIN, Math.round(width)) },
-      toggleExplorer: (draft) => { draft.explorerOpen = !draft.explorerOpen },
+      setExplorerOpen: (draft, open) => { draft.explorerOpen = open },
     },
   })
 }
@@ -4267,36 +4360,88 @@ function EmptyWorkspaceExplorer({ treePortalTarget, sessionTitle }) {
     h('div', { className: 'dsh-wel-settings-hint' }, translate('settings.hint')),
   )
 }
-function ExplorerToggle(props) {
-  // The explorer pane store is a shared engine instance passed through the
-  // inject face (like AppFrame's), not a store-seat handle: the store seat
-  // resolves instances by calling handle.create(), which an already-created
-  // instance does not provide. Reading the instance directly keeps one shared
-  // geometry store between this toggle and the AppFrame.
-  const open = useSyncExternalStore(props.explorerPaneStore.subscribe, props.explorerPaneStore.getSnapshot)
-  const label = open ? translate('nav.explorer.close') : translate('nav.explorer.open')
+/* The sidebar-footer mobile-mode toggle: a compact button that turns the
+   whole layout into the centered phone column. Entering mobile opens the
+   floating sidebar drawer (its default), so the browsing content stays
+   reachable; leaving it clears the drawer and file-fullscreen sub-states. */
+function MobileModeToggle(props) {
+  const { on } = useMobile()
+  const label = translate('mobile.toggle')
   return h('button', {
-    'aria-expanded': open,
     'aria-label': label,
-    'aria-pressed': open,
-    className: 'dsh-wel-explorer-toggle',
-    'data-open': open || undefined,
+    'aria-pressed': on,
+    className: 'dsh-wel-mobile-toggle',
+    'data-open': on || undefined,
     'data-rail': !props.wide || undefined,
-    onClick: () => props.explorerPaneStore.actions.toggleExplorer(),
+    onClick: () => { setMobile(!on) },
     title: label,
     type: 'button',
   },
-    h('svg', { 'aria-hidden': true, className: 'dsh-wel-explorer-icon', fill: 'none', viewBox: '0 0 24 24' },
-      h('rect', { x: 3.5, y: 4.5, width: 17, height: 15, rx: 2.5, stroke: 'currentColor', strokeWidth: 1.6 }),
-      h('path', { d: 'M9 5v14M12.5 9h4.5M12.5 12h4.5M12.5 15h3', stroke: 'currentColor', strokeLinecap: 'round', strokeWidth: 1.6 })),
-    props.wide ? h('span', { className: 'dsh-wel-explorer-label' }, translate('nav.explorer')) : null,
+    h('svg', { 'aria-hidden': true, className: 'dsh-wel-mobile-toggle-icon', fill: 'none', viewBox: '0 0 24 24' },
+      h('rect', { x: 7, y: 2.5, width: 10, height: 19, rx: 2, stroke: 'currentColor', strokeWidth: 1.6 }),
+      h('path', { d: 'M11 18.5h2', stroke: 'currentColor', strokeLinecap: 'round', strokeWidth: 1.6 })),
+    props.wide ? h('span', { className: 'dsh-wel-mobile-toggle-label' }, label) : null,
   )
+}
+/* The whale button that opens/closes the floating sidebar drawer in mobile
+   mode (the shared chrome for the session header and the hero overlay). */
+function MobileWhaleButton({ open, onToggle }) {
+  const label = open ? translate('mobile.sidebarClose') : translate('mobile.sidebarOpen')
+  return h('button', {
+    'aria-expanded': open,
+    'aria-label': label,
+    className: open ? 'dsh-wel-mobile-whale dsh-wel-mobile-active' : 'dsh-wel-mobile-whale',
+    onClick: onToggle,
+    title: label,
+    type: 'button',
+  },
+    h('svg', { 'aria-hidden': true, fill: 'none', height: 18 * 19.04 / 25.16, stroke: 'currentColor', strokeWidth: 1.4, viewBox: '-1 -1 25.16 19.04', width: 18 },
+      h('path', { d: FISH })))
+}
+/* The file-content-browsing button shared by the session header and the hero
+   overlay: toggles file-fullscreen mode (setMobileFiles) and shows its active
+   state via dsh-wel-mobile-active. */
+function MobileFilesButton() {
+  const { files } = useMobile()
+  return h('button', {
+    'aria-label': translate('mobile.files'),
+    'aria-pressed': files,
+    className: files ? 'dsh-wel-mobile-files dsh-wel-mobile-active' : 'dsh-wel-mobile-files',
+    onClick: () => setMobileFiles(!files),
+    title: translate('mobile.files'),
+    type: 'button',
+  },
+    h('svg', { 'aria-hidden': true, className: 'dsh-wel-mobile-files-icon', fill: 'none', viewBox: '0 0 24 24' },
+      h('path', { d: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z', stroke: 'currentColor', strokeLinejoin: 'round', strokeWidth: 1.6 }),
+      h('path', { d: 'M14 2v6h6', stroke: 'currentColor', strokeLinejoin: 'round', strokeWidth: 1.6 })))
+}
+/* The session-header mobile controls: the whale (floating-drawer toggle)
+   followed by the file-content-browsing button, at the phone column's
+   top-left. CSS hides them outside mobile mode. The drawer's outside-click
+   scrim is drawn by AppFrame (sibling of the drawer), not here, so it always
+   stacks between the page and the drawer. */
+function MobileHeaderControls() {
+  const { drawerOpen } = useMobile()
+  return h('div', { className: 'dsh-wel-mobile-controls' },
+    h(MobileWhaleButton, { onToggle: () => setDrawerOpen(!drawerOpen), open: drawerOpen }),
+    h(MobileFilesButton))
+}
+/* The hero-page whale + file button: rendered in the shell.overlay seat for
+   the blank-session hero, where there is no session header. The controls only
+   show under the mobile gate + hero page (CSS :has gate, mirroring
+   mobile-preview). */
+function MobileHeroControls() {
+  const { drawerOpen } = useMobile()
+  return h('div', { className: 'dsh-wel-mobile-hero' },
+    h(MobileWhaleButton, { onToggle: () => setDrawerOpen(!drawerOpen), open: drawerOpen }),
+    h(MobileFilesButton))
 }
 function AppFrame(props) {
   const panels = props.useStore(state => state)
   const previewPanels = useSyncExternalStore(props.previewSessionsStore.subscribe, props.previewSessionsStore.getSnapshot)
   const settings = useSyncExternalStore(props.settingsStore.subscribe, props.settingsStore.getSnapshot)
   const panes = useSyncExternalStore(props.explorerPaneStore.subscribe, props.explorerPaneStore.getSnapshot)
+  const mobile = useMobile()
   // Mirror the runtime sidebar width into the persisted explorer pane store:
   // the layout store owns the live value but cannot persist wholesale (it also
   // carries large file drafts), so the pane store's small layout value is the
@@ -4308,6 +4453,26 @@ function AppFrame(props) {
       props.explorerPaneStore.actions.setSidebar(panels.sidebar)
     }
   }, [panels.sidebar, props.explorerPaneStore])
+  // In mobile file-fullscreen the conversation header stays pinned above the
+  // file browsing page; its live height feeds --dsh-wel-mobile-header-h so the
+  // preview fills the phone column below it.
+  const [mobileHeaderHeight, setMobileHeaderHeight] = useState(MOBILE_HEADER_FALLBACK_H)
+  useLayoutEffect(() => {
+    if (!mobile.on || !mobile.files) return undefined
+    const section = chatSectionRef.current
+    if (section === null) return undefined
+    const header = section.querySelector('[data-slot="conversation.session.header"]')
+    if (header === null) return undefined
+    const measure = () => {
+      const height = header.getBoundingClientRect().height
+      if (height > 0) setMobileHeaderHeight(height)
+    }
+    measure()
+    if (typeof ResizeObserver !== 'function') return undefined
+    const observer = new ResizeObserver(measure)
+    observer.observe(header)
+    return () => { observer.disconnect() }
+  }, [mobile.files, mobile.on])
   const chatFontScale = (settings.chatFontSize ?? CHAT_FONT_SIZE_DEFAULT) / CHAT_FONT_SIZE_DEFAULT
   // One accent custom property per color group; unset groups resolve to their
   // default inside the CSS rule's var() fallback (the value here is the
@@ -4626,6 +4791,23 @@ function AppFrame(props) {
     }
   }, [])
   const collapsed = panels.sidebar === 0
+  // Mobile mode expands the sidebar so the floating drawer shows the full
+  // browsing content (the rail has no drawer affordance); the previous
+  // collapsed state is restored when mobile turns off (mirroring mobile-
+  // preview's forceExpanded behavior). Declared after `collapsed` so the
+  // dependency array reads an initialized binding (TDZ-safe).
+  const sidebarWasCollapsedRef = useRef(null)
+  useEffect(() => {
+    if (mobile.on) {
+      if (sidebarWasCollapsedRef.current === null) {
+        sidebarWasCollapsedRef.current = collapsed
+        if (collapsed) props.toggleSidebar()
+      }
+    } else if (sidebarWasCollapsedRef.current !== null) {
+      if (sidebarWasCollapsedRef.current) props.toggleSidebar()
+      sidebarWasCollapsedRef.current = null
+    }
+  }, [collapsed, mobile.on, props.toggleSidebar])
   const view = panels.view === 'files' ? 'files' : 'sessions'
   const filesMode = view === 'files'
   const filesActive = filesMode && !collapsed
@@ -4648,7 +4830,7 @@ function AppFrame(props) {
   const preview = filesActive || panes.explorerOpen ? clamp(panes.preview ?? PREVIEW_DEFAULT, PREVIEW_MIN, previewMax) : 0
   const previewBoundary = sidebar + preview
   const treePortalTarget = sidebarChrome?.files ?? null
-  return h('div',{ref:viewportRef,className:'dsh-wel-viewport'},h('main',{className:'dsh-wel-frame','data-explorer-closed':!panes.explorerOpen&&!filesActive||undefined,'data-sidebar-collapsed':collapsed||undefined,'data-sidebar-files':filesActive||undefined,'data-resizing':resizing||undefined,style:{'--dsh-wel-preview':`${preview}px`,'--dsh-wel-sidebar':`${sidebar}px`,'--dsh-wel-row-height':`${clamp(settings.rowHeight ?? ROW_HEIGHT_DEFAULT, ROW_HEIGHT_MIN, ROW_HEIGHT_MAX)}px`,'--dsh-wel-chat-font-scale':String(chatFontScale),...fileColorVars}},h('aside',{className:'dsh-wel-sidebar',ref:asideRef},props.renderSlot('sidebar',{collapsed,width:sidebar}),sidebarChrome?.top?createPortal(h(SidebarTopActions,{collapsed,view,width:sidebar,onSelectSessions:()=>{props.actions.setView('sessions')},onSelectFiles:()=>{if(collapsed)props.toggleSidebar();props.actions.setView('files')}}),sidebarChrome.top):null),workspace?h(WorkspaceExplorer,{key:previewSessionKey ?? workspace.workspaceId,clearDraft:clearWorkspaceDraft,createEntry:props.createEntry,listDirectory:props.listDirectory,persistDraft:persistWorkspaceDraft,persistPreviewSession,publishEditorContext,readFile:props.readFile,renameEntry:props.renameEntry,saveFile:props.saveFile,settingsStore:props.settingsStore,storedDraft:panels.drafts[String(workspace.workspaceId)],storedPreviewSession,sessionTitle,sessionId,renameSession:props.renameSession,treePortalTarget,workspace}):h(EmptyWorkspaceExplorer,{sessionTitle,treePortalTarget}),h('section',{className:'dsh-wel-chat',ref:chatSectionRef},props.renderSlot('conversation',{}),chatDropActive?h('div',{className:'dsh-wel-chat-drop-mask',role:'presentation'},h('button',{'aria-label':translate('drop.closeAria'),className:'dsh-wel-chat-drop-close',onClick:()=>{chatDropSuppressed.current=true;setChatDropActive(false)},title:translate('drop.closeTitle'),type:'button'},'×'),h('div',{className:'dsh-wel-chat-drop-card'},translate('drop.releaseImages'))):null),!collapsed?h(ResizeHandle,{label:translate('resize.sidebar'),left:sidebar,max:sidebarMax,min:SIDEBAR_MIN,onDragging:setResizing,onResize:width=>props.actions.setSidebar(width,sidebarMax),value:sidebar}):null,(panes.explorerOpen||filesActive)?h(ResizeHandle,{label:translate('resize.preview'),left:previewBoundary,max:previewMax,min:PREVIEW_MIN,onDragging:setResizing,onResize:width=>props.explorerPaneStore.actions.setPreview(width,previewMax),value:preview}):null,h('aside',{className:'dsh-wel-details','data-closed':!panels.detailsOpen||!detailsCapable||undefined},props.renderSlot('details',{})),h('div',{className:'dsh-wel-overlay','data-shell-overlay':true},props.renderSlot('shell.overlay',{}))))}
+  return h('div',{ref:viewportRef,className:'dsh-wel-viewport'},h('main',{className:'dsh-wel-frame','data-explorer-closed':!panes.explorerOpen&&!filesActive||undefined,'data-sidebar-collapsed':collapsed||undefined,'data-sidebar-files':filesActive||undefined,'data-resizing':resizing||undefined,style:{'--dsh-wel-preview':`${preview}px`,'--dsh-wel-sidebar':`${sidebar}px`,'--dsh-wel-row-height':`${clamp(settings.rowHeight ?? ROW_HEIGHT_DEFAULT, ROW_HEIGHT_MIN, ROW_HEIGHT_MAX)}px`,'--dsh-wel-chat-font-scale':String(chatFontScale),'--dsh-wel-mobile-header-h':`${mobileHeaderHeight}px`,...fileColorVars}},h('aside',{className:'dsh-wel-sidebar',ref:asideRef},props.renderSlot('sidebar',{collapsed,width:sidebar}),sidebarChrome?.top?createPortal(h(SidebarTopActions,{collapsed,view,width:sidebar,onSelectSessions:()=>{props.actions.setView('sessions')},onSelectFiles:()=>{if(collapsed)props.toggleSidebar();props.actions.setView('files')}}),sidebarChrome.top):null),workspace?h(WorkspaceExplorer,{key:previewSessionKey ?? workspace.workspaceId,clearDraft:clearWorkspaceDraft,createEntry:props.createEntry,listDirectory:props.listDirectory,persistDraft:persistWorkspaceDraft,persistPreviewSession,publishEditorContext,readFile:props.readFile,renameEntry:props.renameEntry,saveFile:props.saveFile,settingsStore:props.settingsStore,storedDraft:panels.drafts[String(workspace.workspaceId)],storedPreviewSession,sessionTitle,sessionId,renameSession:props.renameSession,treePortalTarget,workspace}):h(EmptyWorkspaceExplorer,{sessionTitle,treePortalTarget}),h('section',{className:'dsh-wel-chat',ref:chatSectionRef},props.renderSlot('conversation',{}),chatDropActive?h('div',{className:'dsh-wel-chat-drop-mask',role:'presentation'},h('button',{'aria-label':translate('drop.closeAria'),className:'dsh-wel-chat-drop-close',onClick:()=>{chatDropSuppressed.current=true;setChatDropActive(false)},title:translate('drop.closeTitle'),type:'button'},'×'),h('div',{className:'dsh-wel-chat-drop-card'},translate('drop.releaseImages'))):null),!collapsed?h(ResizeHandle,{label:translate('resize.sidebar'),left:sidebar,max:sidebarMax,min:SIDEBAR_MIN,onDragging:setResizing,onResize:width=>props.actions.setSidebar(width,sidebarMax),value:sidebar}):null,(panes.explorerOpen||filesActive)?h(ResizeHandle,{label:translate('resize.preview'),left:previewBoundary,max:previewMax,min:PREVIEW_MIN,onDragging:setResizing,onResize:width=>props.explorerPaneStore.actions.setPreview(width,previewMax),value:preview}):null,h('aside',{className:'dsh-wel-details','data-closed':!panels.detailsOpen||!detailsCapable||undefined},props.renderSlot('details',{})),mobile.on&&mobile.drawerOpen?h('div',{className:'dsh-wel-mobile-scrim',onClick:()=>setDrawerOpen(false)}):null,h('div',{className:'dsh-wel-overlay','data-shell-overlay':true},props.renderSlot('shell.overlay',{}))))}
 
 export const inject = ['slots', 'theme', 'sessions']
 export function apply(ctx) {
@@ -4657,6 +4839,10 @@ export function apply(ctx) {
   const previewSessionsStore = createPreviewSessionStore().create()
   const settingsStore = createExplorerSettingsStore().create()
   const explorerPaneStore = createExplorerPaneStore().create()
+  // The explorer footer toggle was removed; keep the panes always on-screen.
+  // Persisted `explorerOpen:false` from the removed toggle (users who had
+  // closed it) self-heals here, since nothing else can reopen it anymore.
+  explorerPaneStore.actions.setExplorerOpen(true)
   const editorContexts = new EditorContextController()
   /* Follow the harness language setting (Settings -> General -> Language) when
      the locale plugin is present: register this plugin's dictionaries, bind
@@ -4796,10 +4982,19 @@ export function apply(ctx) {
     }),
   }, EditorContextPrefix))
   ctx.effect(() => () => { editorContexts.dispose() }, 'workspace-explorer-layout: editor context state')
+  /* Mobile mode entries: the sidebar-footer toggle, the session-header whale +
+     file-content-browsing controls (declared by ui-conversation), and the
+     hero-page whale (declared by this plugin's root, rendered into the
+     shell.overlay seat). All contributions install when their slot declares. */
   ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
-    name: 'sidebar.footer.action', id: 'workspace-explorer-toggle', order: 100,
-    inject: () => ({ explorerPaneStore }),
-  }, ExplorerToggle))
+    name: 'sidebar.footer.action', id: 'workspace-mobile-toggle', order: 110,
+  }, MobileModeToggle))
+  ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
+    name: 'conversation.session.header.actions', id: 'workspace-mobile-controls', order: -300,
+  }, MobileHeaderControls))
+  ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+    name: 'shell.overlay', id: 'workspace-mobile-hero', order: -100,
+  }, MobileHeroControls))
   // The browser Settings page owns every explorer preference in one section,
   // grouped into file browsing, content browsing, and dialog settings (unset
   // color/preset groups resolve to their defaults).
