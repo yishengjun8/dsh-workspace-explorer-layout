@@ -3,3 +3,5 @@ dist/
 *.tsbuildinfo
 .coverage/
 *.log
+docs
+AGENTS.md

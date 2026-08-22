@@ -1,33 +1,100 @@
-# DeepSeek Harness Four-Pane Workspace Layout Plugin
+# 🗂️ DeepSeek Harness Four-Pane Workspace Layout Plugin
 
 English | [中文](README.md)
 
-This bundle replaces the DeepSeek Harness Web root layout with four panes: the session/workspace selector, the current workspace file tree, the highlighted file view and guarded editor, and chat. It preserves the existing sidebar, conversation, details, and global-overlay Slot contracts, so the built-in plugins keep owning new-session creation, workspace session lists, settings, chat, tool details, and approvals. Tool details open as a right-side drawer over the four-pane layout instead of consuming a permanent pane.
+This bundle replaces the DeepSeek Harness Web root layout with four panes: **session/workspace selector · current workspace file tree · highlighted file view and guarded editor · chat**. It preserves the existing sidebar, conversation, details, and global-overlay Slot contracts, so the built-in plugins keep owning new-session creation, workspace session lists, settings, chat, tool details, and approvals. Tool details open as a right-side drawer over the four-pane layout instead of consuming a permanent pane.
 
-## Features
+## 📸 Screenshots
+
+| ![Four-pane layout overview](image/image-1.png) | ![File view and editor](image/image-2.png) |
+|---|---|
+
+## ✨ Key Highlights
+
+| Capability | Description |
+|---|---|
+| 📁 **Workspace file tree** | Appears automatically when the session belongs to a Workspace; directories first, incremental expansion, and **expanded state and scroll position restore per session** after a reload |
+| ⌨️ **CodeMirror 6 editor** | 20+ language syntax highlighting, line numbers, code folding, in-editor search, word wrap, and 14 text encodings |
+| 🗂️ **Preview tabs** | Persisted per session, survive reloads, drag reorder, pinned tabs, drafts never lost, conflict protection |
+| 🎯 **Editor context** | Open files / selections inject as `<opened_file>` / `<selection>` prefixes; history keeps a one-line summary |
+| 🧹 **File operations** | Right-click create / rename / copy / cut / paste / delete / copy path, with shortcuts |
+| 📱 **Mobile mode** | One-click switch to a centered phone column; file browsing can fill the phone column |
+| 🔒 **Security boundary** | Workspace-confined read/write, path containment, revision conflict protection, symlink rejection |
+
+## 🧩 Features
+
+### File Tree
 
 - Automatically shows the Workspace file tree when the current Session belongs to a Workspace (also recognized when the Session `cwd` equals its path); directories sort before files, with incremental expansion, collapse, and manual refresh.
-- Uses CodeMirror 6 to show line numbers and syntax highlighting based on filenames or extensions; unknown types use plain text.
-- In the preview editor, `Ctrl+K+J` unfolds every collapsed fold region; `Ctrl+K+1..9` folds code by nesting level (e.g. `Ctrl+K+2` folds every second-level fold region).
-- The UI language follows the Harness setting (Settings → General → Language; Chinese / English) and switches live; the editor-context hints and plugin API error messages are localized in the English surface as well, with no restart or reload.
-- Enters editing only on an explicit action with **Save**, **Cancel**, and `Ctrl/Cmd+S`; it never autosaves, and switching files never silently discards unsaved content.
-- Opens files in per-Session preview tabs with `X` close, drag reorder, tree reveal on selection, and per-tab scroll restore; tabs survive reloads while the draft cache stays in page memory, out of `localStorage`.
+- Expanded folders persist per current session and re-expand after a reload; selecting a tab reveals it in the tree and restores the vertical scroll position.
+- The sidebar top row switches between **Sessions / File Explorer** views; right-clicking the session title renames the current session.
+- Drag-resize the session, tree, and editor panes (up to 80% of the layout while open); layout parameters persist globally in `localStorage`.
+
+### Editor
+
+- CodeMirror 6 shows line numbers and syntax highlighting based on filenames or extensions; unknown types use plain text. A fold gutter and in-editor search (`Ctrl/Cmd+F`, `F3`) are built in.
+- `Ctrl+K+J` unfolds every collapsed fold region; `Ctrl+K+1..9` folds code by nesting level (e.g. `Ctrl+K+2` folds every second-level fold region).
+- The panel header offers **Word wrap** and **Reload from disk** (refresh) toggles; refresh refuses to run while there are unsaved drafts and explains why.
+- Each file-type group can pick an editor highlight preset (Default, Classic, Warm, Cool, Monochrome, XML (VS Code)) from the Explorer settings page, remembered per type in `localStorage`.
+
+### Encodings
+
+- File preview auto-detects the encoding (UTF-8 / UTF-8 BOM / UTF-16 LE / BE / GBK / GB18030 / Big5 / Shift_JIS / EUC-JP / EUC-KR / ISO-8859-1 / Windows-1252 / Windows-1251 / ASCII).
+- Right-click the preview header to **Open With Encoding…** (re-decode) or **Save As Encoding…** (write back); the panel header shows the current encoding badge.
+- The encoding list is authoritative from the server `/api/encodings`; a failed request falls back to the built-in list, so the actions never dead-end.
+
+### Preview Tabs
+
+- Opened files enter per-Session preview tabs: `X` to close, drag to reorder, and tabs survive reloads.
+- **Pinned tabs**: right-click a tab to **Pin / Unpin**; pinned tabs show a pin icon and sort first, and **Close Other Tabs** only closes unpinned tabs.
+- Draft caches stay in page memory, out of `localStorage`; switching files never silently discards unsaved content.
+- The tab bar scrolls horizontally with the wheel, and newly activated tabs auto-scroll into view.
+
+### Editing & Saving
+
+- Enters editing only on an explicit action with **Save**, **Cancel**, and `Ctrl/Cmd+S`; it never autosaves.
 - Saves against the revision observed at read time; a disk change preserves the draft and reports a conflict instead of overwriting.
 - Rejects binary, non-UTF-8, and out-of-Workspace symlink files; truncated large files, mixed-line-ending files, and symlink-traversing paths are read-only.
-- Creates files and folders at the selected level and renames with `F2`; delete and upload are not provided.
-- The session, tree, and editor panes drag-resize (up to 80% of the layout while open), and layout parameters persist globally in `localStorage`.
-- Adds a "Mobile mode" toggle in the sidebar footer (same approach as dsh-mobile-preview): turning it on collapses the whole layout into a centered phone column, the sidebar becomes a floating drawer opened and closed by the whale at the top-left (the session list and file tree stay inside it), and a "Browse files" button appears right of the whale in the conversation header — clicking it fills the phone column with file browsing (preview tabs + editor) while the conversation header stays reachable; clicking again or leaving mobile mode restores the desktop layout. Mobile mode is transient state, so a reload returns to the desktop layout.
-- Lets each file-type group pick an editor highlight preset (Default, Classic, Warm, Cool, Monochrome, XML (VS Code)) from the Explorer settings page, remembered per type in `localStorage`.
-- Opens the assistant's Think disclosure automatically while its reasoning streams and collapses it again after a configurable delay (0–10 s in 0.1 s steps, default 3 s; manual interaction during the window cancels the collapse), deferring to manual user interaction; the Explorer settings page can disable this behavior and adjust the delay.
-- Applies configurable limits to directory entries, file size, entry names, and mutation bodies (1,000 entries per directory, 1 MiB per file, 255-byte names, 4 KiB per request by default).
-- Shows the editor context as a non-editable prefix outside the textarea through the existing input dock: active sends freeze the context and render `<opened_file>...</opened_file>` or, for selected text, `<selection>...</selection>` (no file bytes without a selection); gray sends attach nothing. The Host validates it, prepends it to the direct user prompt, and the conversation view folds it into a one-line summary above the bubble showing the file name and range.
+
+### File Operations
+
+- Creates files and folders at the selected level and renames with `F2`.
+- Context menu: Copy Name, Copy Path, Copy Relative Path, and **Reveal in Explorer** (opens the OS file manager).
+- Right-click Copy / Cut / Paste / Delete, with shortcuts `Ctrl/Cmd+C`, `Ctrl/Cmd+X`, `Ctrl/Cmd+V`, `Del`.
+- Cut + Paste = move; colliding targets auto-rename (`a.txt → a-1.txt`); delete asks for confirmation and adds a warning when unsaved tabs are affected.
+- The clipboard is in-memory and workspace-isolated (paste from another Workspace is disabled) and resets on reload; external files (dropped-in read-only previews) cannot be renamed or deleted.
+
+### Search
+
+- Search results group by file: clicking a file header collapses / expands that file's matches, and clicking a match opens the file and jumps to the line.
+- Case-sensitive toggling is supported; files too large to be fully searched are marked **Partial**.
+- The Explorer settings page chooses whether search results default to expanded or collapsed.
+
+### Editor Context
+
+- The editor context appears as a non-editable prefix outside the textarea through the existing input dock: active sends freeze the context and render `<opened_file>...</opened_file>` or, for selected text, `<selection>...</selection>` (no file bytes without a selection); gray sends attach nothing.
+- The Host validates it, prepends it to the direct user prompt, and the conversation view folds it into a one-line summary above the bubble showing the file name and range; history renders the logged user message only.
+
+### Chat Experience
+
+- The UI language follows the Harness setting (Settings → General → Language; Chinese / English) and switches live, with no restart or reload.
+- The assistant's Think disclosure opens automatically while its reasoning streams and collapses after a configurable delay (0–10 s in 0.1 s steps, default 3 s; manual interaction during the window cancels the collapse), deferring to manual user interaction; the Explorer settings page can disable this and adjust the delay.
+- The `/init` command (Claude Code style) generates or updates `AGENTS.md` at the current session's workspace root; when the file already exists a dialog offers **Update** or **Cancel**, and the current agent analyzes the workspace and generates it.
+- Drop external files into the preview pane to preview them as read-only tabs (session-only; nothing is written to the workspace).
+
+### Appearance & Settings
+
 - Uses Harness semantic theme variables and supports light, dark, and system themes.
+- Explorer settings page: tree row height, search result display, file icon badge colors, per-type highlight presets, chat font size, and Think auto-expand / collapse delay.
+- A **Mobile mode** toggle in the sidebar footer (same approach as dsh-mobile-preview) collapses the layout into a centered phone column; the sidebar becomes a floating drawer opened by the whale at the top-left (session list and file tree stay inside it), and a **Browse files** button appears right of the whale in the conversation header to fill the phone column with file browsing while the header stays reachable. Mobile mode is transient, so a reload returns to the desktop layout.
 
-## Syntax highlighting
+## 🎨 Syntax Highlighting
 
-The bundle includes JavaScript/JSX, TypeScript/TSX, JSON, HTML, CSS/SCSS/Less, Markdown/MDX, Python, SQL, XML/SVG, YAML, C/C++, Java, Rust, PHP, Go, Shell, PowerShell, Ruby, TOML, and Dockerfile highlighting. `Makefile`, `.gitignore`, `.env`, `LICENSE`, and unknown extensions stay browsable and editable in plain text.
+Built in for **20+ languages**: JavaScript/JSX, TypeScript/TSX, JSON, HTML, CSS/SCSS/Less, Markdown/MDX, Python, SQL, XML/SVG, YAML, C/C++, Java, Rust, PHP, Go, Shell, PowerShell, Ruby, TOML, and Dockerfile.
 
-## Installation
+`Makefile`, `.gitignore`, `.env`, `LICENSE`, and unknown extensions stay browsable and editable in plain text.
+
+## 📦 Installation
 
 Run from Git Bash, Linux, or WSL:
 
@@ -37,9 +104,9 @@ bash ./install.sh          # default target is the web profile
 bash ./install.sh web      # a profile can be supplied explicitly
 ```
 
-The script first uses `dsh` from PATH; when the current directory belongs to a Harness checkout and PATH has no `dsh`, it uses `pnpm --dir <harness-root> dsh`, and `DSH_BIN` may name an executable. After installation, stop and restart the existing Web process, then refresh `http://127.0.0.1:3080`; the script does not start a second server.
+The script first uses `dsh` from PATH; when the current directory belongs to a Harness checkout and PATH has no `dsh`, it uses `pnpm --dir <harness-root> dsh`, and `DSH_BIN` may name an executable. After installation, **stop and restart the existing Web process**, then refresh `http://127.0.0.1:3080`; the script does not start a second server.
 
-## Uninstallation
+## 🗑️ Uninstallation
 
 ```sh
 bash ./uninstall.sh
@@ -47,7 +114,7 @@ bash ./uninstall.sh
 
 Restart the existing Web process after removal; the built-in `ui-layout` returns when the bundle layer is removed.
 
-## Configuration
+## ⚙️ Configuration
 
 The plugin row in `cordis.patch.yml` accepts:
 
@@ -63,19 +130,19 @@ The plugin row in `cordis.patch.yml` accepts:
 | `maxMutationBodyBytes` | `4096` | Maximum JSON bytes accepted by create and rename requests (128–65536). |
 | `maxPreviewBytes` | `1048576` | Maximum bytes read and returned for one file (1024–10485760). |
 
-Edit the bundle's `cordis.patch.yml` to change these values. To prevent pnpm from reusing an installed local `file:` copy, run `uninstall.sh`, then `install.sh`, and finally restart the Web process.
+> 💡 Edit the bundle's `cordis.patch.yml` to change these values. To prevent pnpm from reusing an installed local `file:` copy, run `uninstall.sh`, then `install.sh`, and finally restart the Web process.
 
-## Security boundary
+## 🔒 Security Boundary
 
-Host endpoints accept only registered Workspace IDs and relative paths; every read or write resolves the real path and confirms the target stays under the canonical Workspace root, so `..`, absolute paths, and out-of-Workspace symlinks are inaccessible. The endpoints also enforce Host, Origin, and Fetch-Metadata source checks equivalent to the built-in `/api` routes.
+**Path containment**: Host endpoints accept only registered Workspace IDs and relative paths; every read or write resolves the real path and confirms the target stays under the canonical Workspace root, so `..`, absolute paths, and out-of-Workspace symlinks are inaccessible. The endpoints also enforce Host, Origin, and Fetch-Metadata source checks equivalent to the built-in `/api` routes.
 
-The write endpoint accepts `PUT` only when `enableEditing` is enabled; the body must be bounded UTF-8 text carrying the read-time `If-Match` revision, and a mismatch returns a conflict without overwriting. The target must be an existing regular file reached without any symbolic link. Create and rename reuse the same containment checks, require single-segment names, and refuse existing targets. The Host commits through a same-directory temporary file, file synchronization, and atomic rename, preserving the original permission mode when possible.
+**Write protection**: The write endpoint accepts `PUT` only when `enableEditing` is enabled; the body must be bounded UTF-8 text carrying the read-time `If-Match` revision, and a mismatch returns a conflict without overwriting. The target must be an existing regular file reached without any symbolic link. Create and rename reuse the same containment checks, require single-segment names, and refuse existing targets. The Host commits through a same-directory temporary file, file synchronization, and atomic rename, preserving the original permission mode when possible.
 
-Editor context accepts only a relative path in a Workspace that owns the current Session (through its membership projection or the Session's canonical cwd); a path-only context carries no file bytes. The Host rejects symbolic links, validates clean selections against their disk revision, treats previews truncated by `maxPreviewBytes` as browser-authoritative, and prepends the rendered text to the direct prompt, so the ordinary Session log records the exact model-visible context. The conversation view folds that envelope into a one-line summary above the bubble showing the file name and range, and history renders the logged user message without rereading the current editor or disk.
+**Context safety**: Editor context accepts only a relative path in a Workspace that owns the current Session (through its membership projection or the Session's canonical cwd); a path-only context carries no file bytes. The Host rejects symbolic links, validates clean selections against their disk revision, treats previews truncated by `maxPreviewBytes` as browser-authoritative, and prepends the rendered text to the direct prompt, so the ordinary Session log records the exact model-visible context. The conversation view folds that envelope into a one-line summary above the bubble showing the file name and range, and history renders the logged user message without rereading the current editor or disk.
 
-These constraints govern only the explorer's file endpoints and Composer context; they do not change Agent permission policy, sandboxing, or tool capability. The endpoints provide application-level path-containment checks for trusted local UI use and do not replace Harness kernel-level isolation.
+> ⚠️ These constraints govern only the explorer's file endpoints and Composer context; they do not change Agent permission policy, sandboxing, or tool capability. The endpoints provide application-level path-containment checks for trusted local UI use and do not replace Harness kernel-level isolation.
 
-## Project structure
+## 📁 Project Structure
 
 ```text
 .
@@ -90,6 +157,6 @@ These constraints govern only the explorer's file endpoints and Composer context
 
 CodeMirror and its language modules are bundled into the prebuilt plain-JavaScript Client artifact, so installation runs no builds or tests. To maintain the source, run `pnpm install --ignore-workspace --config.auto-install-peers=false` in the inner package and then `pnpm bundle` to regenerate `lib/client.js`.
 
-## Compatibility
+## 🔄 Compatibility
 
 This version targets a Harness `0.1.x` checkout that provides the `conversation.input.dock` Slot, the session input resolver, and the conversation send service. The editor-context behavior is implemented entirely by this bundle and does not require modified Harness source; the send bridge adapts the concrete 0.1.x send, input-submit, and queue-steer seams, so a future release may need only a bundle-internal bridge update. A higher-priority patch that re-enables `ui-layout` competes for the root Slot; retain this bundle's `ui-layout` disable entry.
